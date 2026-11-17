@@ -1,0 +1,33 @@
+{
+  "originHash" : "3590844d71099f36284748f4f5c4879cdcc3e054c1fdcff2d31fb1e5d1f05d14",
+  "pins" : [
+    {
+      "identity" : "kanna",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tid-kijyun/Kanna",
+      "state" : {
+        "revision" : "3c73af6d3859d9240db60aef233941a715387744",
+        "version" : "6.1.0"
+      }
+    },
+    {
+      "identity" : "swxmlhash",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/drmohundro/SWXMLHash",
+      "state" : {
+        "revision" : "9cfb8730651ae7f57a6f5d413e2f07be7d7dbd41",
+        "version" : "8.1.1"
+      }
+    },
+    {
+      "identity" : "ziparchive",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ZipArchive/ZipArchive",
+      "state" : {
+        "revision" : "df35718ea19a94e015b91dc4881dee028ce4cdba",
+        "version" : "2.6.0"
+      }
+    }
+  ],
+  "version" : 3
+}
