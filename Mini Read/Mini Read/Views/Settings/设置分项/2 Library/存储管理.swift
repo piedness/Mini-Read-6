@@ -348,7 +348,7 @@ struct StorageSettingsView: View {
         } header: {
             Text("存储位置")
         } footer: {
-            Text("数据保存在本机 App 沙盒内，会随设备备份一同备份；缓存目录不参与备份，系统空间紧张时也可能自行清空。")
+            Text("书籍与阅读数据只保存在本机 App 沙盒内，App 不提供云端同步；缓存目录在系统空间紧张时可能被自行清空。")
         }
     }
 

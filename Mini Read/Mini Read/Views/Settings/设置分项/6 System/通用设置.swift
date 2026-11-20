@@ -78,7 +78,7 @@ struct GeneralSettingsView: View {
             } header: {
                 Text("重置")
             } footer: {
-                Text("将所有设置项还原为初始值，包括文字排版、主题、书库视图、笔记偏好与同步选项。你的书籍、阅读进度、书签和高亮不会被删除。")
+                Text("将所有设置项还原为初始值，包括文字排版、主题、书库视图与笔记偏好。你的书籍、阅读进度、书签和高亮不会被删除。")
             }
         }
         .modifier(CustomListModifier(title: "通用设置"))

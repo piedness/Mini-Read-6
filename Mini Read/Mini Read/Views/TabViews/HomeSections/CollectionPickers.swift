@@ -182,7 +182,5 @@ private extension View {
         self
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
-            .presentationCornerRadius(28)
-            .presentationBackground(.regularMaterial)
     }
 }

@@ -106,20 +106,6 @@ final class AppSettings {
     var watermarkEnabled: Bool = false
     var watermarkText: String = ""
 
-    // 5. 同步与备份
-    var iCloudSync: Bool = true
-    var syncProgress: Bool = true
-    var syncBookmarks: Bool = true
-    var syncNotes: Bool = true
-    var syncSettings: Bool = true
-    var syncBooks: Bool = false
-    var syncFrequency: String = "realtime"
-    var syncOnWiFiOnly: Bool = true
-    var conflictResolution: String = "manual"
-    var autoBackup: Bool = true
-    var backupFrequency: String = "weekly"
-    var backupLocation: String = "icloud"
-
     // 8. 隐私与安全
     var hideReadingHistory: Bool = false
     var enablePrivateShelf: Bool = false
@@ -327,11 +313,11 @@ extension ModelContext {
 
 extension AppSettings {
 
-    /// 「文字排版」页的局部重置：只还原排印相关项，主题 / 书库 / 同步等一概不动。
+    /// 「文字排版」页的局部重置：只还原排印相关项，主题 / 书库 / 标注等一概不动。
     ///
     /// 这里的每一项都与 `TypographySettingsView` 上能直接调到的控件一一对应，
     /// 因此该页的「恢复默认设置」走这里，而不是全量重置——
-    /// 在一个子页里静默改掉 iCloud 同步之类的偏好会很突兀。
+    /// 在一个子页里静默改掉主题、书库视图之类的偏好会很突兀。
     func resetTypographyToDefaults() {
         fontFamily       = FontFamily.LXGWWenKai.rawValue
         fontSize         = 28.0
@@ -424,20 +410,6 @@ extension AppSettings {
         exportByChapter     = false
         watermarkEnabled    = false
         watermarkText       = ""
-
-        // 5. 同步与备份
-        iCloudSync         = true
-        syncProgress       = true
-        syncBookmarks      = true
-        syncNotes          = true
-        syncSettings       = true
-        syncBooks          = false
-        syncFrequency      = "realtime"
-        syncOnWiFiOnly     = true
-        conflictResolution = "manual"
-        autoBackup         = true
-        backupFrequency    = "weekly"
-        backupLocation     = "icloud"
 
         // 8. 隐私与安全
         hideReadingHistory = false

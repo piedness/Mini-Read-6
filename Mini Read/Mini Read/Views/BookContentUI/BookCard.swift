@@ -8,6 +8,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import Photos
 
 
 struct BookCardView: View {
@@ -53,6 +54,23 @@ struct BookCardView: View {
     /// 菜单里选完立刻弹出，中间不跳页面。
     @State private var isAddingToCollection = false
 
+    /// 元数据编辑面板（书名 / 作者 / 出版社 / 封面）。
+    @State private var isEditingMetadata = false
+
+    // MARK: 存封面的反馈
+    //
+    // 菜单项点下去菜单就消失了，在按钮上做动画没人看得见——
+    // 反馈只能落在卡片上，而且必须区分成功与失败：
+    // 旧写法 `UIImageWriteToSavedPhotosAlbum(_, nil, nil, nil)` 三个 nil，
+    // 没权限、写失败、写成功全都无声，用户点完只能靠猜。
+
+    /// 成功：封面中央闪一枚勾，1.4s 后自动淡出。
+    @State private var isShowingCoverSaved = false
+    @State private var isShowingCoverSaveError = false
+    @State private var coverSaveErrorMessage = ""
+    /// 失败原因是权限问题——只有这种才值得给一个「去设置」的出口。
+    @State private var coverSaveFailureNeedsSettings = false
+
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -77,6 +95,12 @@ struct BookCardView: View {
         } message: {
             Text("这本书将从你的书库中移除。")
         }
+        // 刻意挂在 `body` 这一层、而不是 `coverCard` 里：
+        // 「加入书单」的 sheet 挂在卡片 VStack 上，两个 sheet 修饰器落在同一节点时
+        // SwiftUI 只会保留最后一个。分挂两处，两个面板各自都能正常弹出。
+        .sheet(isPresented: $isEditingMetadata) {
+            BookMetadataLibraryView(initialBook: book)
+        }
 
     }
 
@@ -91,6 +115,23 @@ struct BookCardView: View {
                 .matchedTransitionSource(id: "bookContent", in: bookanimation)
                 // 封面本身没有文字可念，显式给书名，VoiceOver 才不会读出一片空白
                 .accessibilityLabel(book.bookTitle)
+                // 收藏角标。既是"刚才那一下生效了"的即时反馈，也是长期可见的状态——
+                // 没有它的话，用户点完 Favorite 从书架上完全看不出区别。
+                .overlay(alignment: .topTrailing) {
+                    if isFavorite {
+                        favoriteBadge
+                    }
+                }
+                .animation(
+                    reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.62),
+                    value: isFavorite
+                )
+                // 存封面的成功反馈：菜单已关闭，所以画在封面上才看得见。
+                .overlay {
+                    if isShowingCoverSaved {
+                        coverSavedBadge
+                    }
+                }
 
             if showsMetaRow {
                 BookProgressAuthorRow(progress: book.readingProgress, author: book.bookAuthor)
@@ -99,7 +140,24 @@ struct BookCardView: View {
         // 整张卡片合成一个可访问性元素：一次划过读出
         // 「书名，阅读进度 45%，作者 某某」并提示可点按，而不是散成三块碎片。
         .accessibilityElement(children: .combine)
+        .accessibilityValue(isFavorite ? "已收藏" : "")
         .accessibilityAddTraits(.isButton)
+        .task(id: isShowingCoverSaved) {
+            // 勾号是"一次性"反馈，留在封面上会变成第二个常驻图标，反而看不懂。
+            guard isShowingCoverSaved else { return }
+            try? await Task.sleep(for: .seconds(1.4))
+            withAnimation(.easeOut(duration: 0.25)) {
+                isShowingCoverSaved = false
+            }
+        }
+        .alert("无法存储封面", isPresented: $isShowingCoverSaveError) {
+            if coverSaveFailureNeedsSettings {
+                Button("去设置") { openSystemSettings() }
+            }
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(coverSaveErrorMessage)
+        }
         .onTapGesture {
             isShowFullscreen.toggle()
         }
@@ -112,31 +170,47 @@ struct BookCardView: View {
             BookCollectionsPicker(book: book)
         }
         .contextMenu {
-            // 收藏放在第一条：它是这个菜单里最轻、最常用的一次操作，
-            // 一下完成，不弹面板。其余"归入某个书单"才走下面的选择器。
-            Button {
-                toggleDefaultCollection()
-            } label: {
-                Label(
-                    isInDefaultCollection ? "Remove from My Favorite" : "Add to My Favorite",
-                    systemImage: isInDefaultCollection ? "heart.slash" : "heart"
-                )
+            // 菜单分四组，节奏对齐 Apple Books：主操作横排 → 编辑 → 导出 → 删除。
+            //
+            // 前两条走 `ControlGroup`：菜单里的 ControlGroup 会渲染成**横排的大图标按钮**
+            // （就是参考图顶部 Share / Want to Read 那一行）。收藏和加书单是这里最常用的
+            // 两个动作，值得占据这一行，而不是和其它项一样挤成一行文字。
+            ControlGroup {
+                Button {
+                    toggleDefaultCollection()
+                } label: {
+                    Label(
+                        isFavorite ? "Unfavorite" : "Favorite",
+                        systemImage: isFavorite ? "heart.slash" : "heart"
+                    )
+                }
+
+
+                Button {
+                    isAddingToCollection = true
+                } label: {
+                    Label("Add to Collection", systemImage: "text.badge.plus")
+                }
             }
+            
             Button {
-                isAddingToCollection = true
+                saveCoverToPhotos(saveSource)
             } label: {
-                Label("Add to Collection…", systemImage: "text.badge.plus")
+                Label("Save Cover", systemImage: "photo.badge.arrow.down.fill")
             }
+
             Button {
-                UIImageWriteToSavedPhotosAlbum(saveSource, nil, nil, nil)
+                isEditingMetadata = true
             } label: {
-                Label("Save Cover Image", systemImage: "photo.badge.arrow.down.fill")
+                Label("Edit", systemImage: "square.and.pencil")
             }
+
             Divider()
+
             Button(role: .destructive) {
                 requestDelete()
             } label: {
-                Label("删除", systemImage: "trash")
+                Label("Delete", systemImage: "trash")
             }
         }
     }
@@ -171,10 +245,15 @@ struct BookCardView: View {
 
     /// 这本书在不在「my favorite」里。
     ///
-    /// 只在菜单弹出时求值——`contextMenu` 的内容闭包是懒执行的，所以书库网格
-    /// 每次 body 求值都不会为每张卡片各 fetch 一次（几百本书时那是灾难）。
-    private var isInDefaultCollection: Bool {
-        DefaultCollection.existing(in: modelContext)?.contains(book) ?? false
+    /// 走反向关系（书 → 所属书单），**不再** fetch 默认书单：
+    /// `DefaultCollection.existing(in:)` 是一次全库查询，原先只在 `contextMenu` 的懒闭包里
+    /// 求值才安全；现在角标要画在 `body` 里，每张卡片每次重绘都 fetch 一次会拖垮书库网格。
+    /// 关系遍历是 O(该书所属书单数)，通常 0–3 条。
+    ///
+    /// 关系变更的观察已实测：从 `collection.books` 一侧增删，`book.collections` 的
+    /// `withObservationTracking` 回调会触发，所以角标能跟着动画即时出现/消失。
+    private var isFavorite: Bool {
+        book.collections.contains { $0.isDefault }
     }
 
     /// 一下加入 / 移出默认书单。
@@ -195,6 +274,89 @@ struct BookCardView: View {
         }
         try? modelContext.save()
         triggerHaptic(.light)
+    }
+
+    // MARK: - 角标
+
+    /// 收藏角标：白心 + 半透明黑底。
+    ///
+    /// 不用 `heart.fill` 原色（红/粉）：封面本身可能是任何颜色，纯色心形在红封面上会糊掉。
+    /// 深色圆底 + 白色图形在任何封面上都有稳定对比度，也不会抢走封面的主角位置。
+    private var favoriteBadge: some View {
+        Image(systemName: "heart.fill")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(5)
+            .background(.black.opacity(0.45), in: Circle())
+            .padding(6)
+            .transition(.scale(scale: 0.4).combined(with: .opacity))
+            // 状态已经并进卡片朗读（accessibilityValue），这里不必再念一遍"心形"
+            .accessibilityHidden(true)
+    }
+
+    /// 存封面的成功回执：封面正中的勾，1.4s 后自动淡出（见 `coverCard` 里的 `.task`）。
+    private var coverSavedBadge: some View {
+        Image(systemName: "checkmark.circle.fill")
+            .font(.system(size: 32, weight: .semibold))
+            .symbolRenderingMode(.palette)
+            .foregroundStyle(.white, .black.opacity(0.5))
+            .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
+            .transition(.scale(scale: 0.7).combined(with: .opacity))
+            .accessibilityHidden(true)
+    }
+
+    // MARK: - 存封面到相册
+
+    /// 把封面写进系统相册，并把结果变成看得见的反馈。
+    ///
+    /// 三步都要：
+    /// 1. **显式请求 add-only 权限**——没权限时直接写会静默失败，用户只会觉得"点了没反应"；
+    /// 2. `performChanges` 的回调里拿成功/失败——旧实现传了三个 `nil`，成功失败都无声；
+    /// 3. 成功画勾 + 成功触觉，失败弹 alert（权限问题额外给「去设置」）。
+    private func saveCoverToPhotos(_ image: UIImage) {
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            Task { @MainActor in
+                guard status == .authorized || status == .limited else {
+                    presentCoverSaveFailure(
+                        "没有相册写入权限。请到「设置 → 隐私与安全性 → 照片」里允许本 App 添加照片。",
+                        needsSettings: true
+                    )
+                    return
+                }
+
+                PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.creationRequestForAsset(from: image)
+                } completionHandler: { success, error in
+                    Task { @MainActor in
+                        guard success else {
+                            presentCoverSaveFailure(
+                                error?.localizedDescription ?? "无法把封面写入相册。",
+                                needsSettings: false
+                            )
+                            return
+                        }
+
+                        triggerNotificationHaptic(.success)
+                        withAnimation(reduceMotion ? .easeOut(duration: 0.15)
+                                                   : .spring(response: 0.32, dampingFraction: 0.66)) {
+                            isShowingCoverSaved = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func presentCoverSaveFailure(_ message: String, needsSettings: Bool) {
+        triggerNotificationHaptic(.error)
+        coverSaveErrorMessage = message
+        coverSaveFailureNeedsSettings = needsSettings
+        isShowingCoverSaveError = true
+    }
+
+    private func openSystemSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 
     // MARK: - 删除

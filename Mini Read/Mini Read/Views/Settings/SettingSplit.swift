@@ -16,9 +16,6 @@ enum SettingsRoute: Hashable, CaseIterable {
     case highlight
     case noteSystem
     case exportShare
-    // 同步与备份
-    case cloudSync
-    case backupRecovery
     // 隐私与安全
     case privacySecurity
     // 系统设置
@@ -42,7 +39,6 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
     case reading = "阅读体验"
     case library = "书库管理"
     case notes = "笔记与标注"
-    case sync = "同步与备份"
     case privacy = "隐私与安全"
     case other = "其他"
     
@@ -73,11 +69,6 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
                 SettingsItem(route: .highlight,   label: "高亮与标注", icon: "highlighter",          iconColor: .yellow),
                 SettingsItem(route: .noteSystem,  label: "笔记系统",   icon: "note.text",            iconColor: .orange),
                 SettingsItem(route: .exportShare, label: "导出与分享", icon: "square.and.arrow.up.fill", iconColor: .blue)
-            ]
-        case .sync:
-            return [
-                SettingsItem(route: .cloudSync,       label: "云端同步",   icon: "icloud.fill",               iconColor: .cyan),
-                SettingsItem(route: .backupRecovery,  label: "备份与恢复", icon: "arrow.clockwise.icloud.fill", iconColor: .blue)
             ]
         case .privacy:
             return [
@@ -311,8 +302,6 @@ struct SettingsView: View {
         case .highlight:       HighlightSettingsView(settings: appSettings)
         case .noteSystem:      NoteSystemSettingsView(settings: appSettings)
         case .exportShare:     ExportShareSettingsView(settings: appSettings)
-        case .cloudSync:       CloudSyncSettingsView(settings: appSettings)
-        case .backupRecovery:  BackupRecoverySettingsView(settings: appSettings)
         case .privacySecurity: PrivacySecuritySettingsView(settings: appSettings)
         case .general:         GeneralSettingsView(settings: appSettings)
         case .performance:     PerformanceSettingsView(settings: appSettings)

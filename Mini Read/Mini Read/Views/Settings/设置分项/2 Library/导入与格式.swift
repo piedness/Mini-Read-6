@@ -10,7 +10,11 @@ import SwiftData
 // 导入与格式
 struct ImportFormatSettingsView: View {
     @Bindable var settings: AppSettings
-    
+
+    /// 元数据编辑器（书库列表 + 编辑页）以面板形式呈现：
+    /// 它是一次独立的小任务，不该把设置页的导航栈也一起推进去。
+    @State private var isEditingMetadata = false
+
     var body: some View {
         List {
             // 导入设置
@@ -30,31 +34,23 @@ struct ImportFormatSettingsView: View {
             
             // 元数据管理
             Section {
-                Button("手动编辑元数据") {
-                    // 打开元数据编辑器
+                Button {
+                    isEditingMetadata = true
+                } label: {
+                    Label("手动编辑元数据", systemImage: "text.badge.checkmark")
                 }
+                .accessibilityHint("选择一本书，修改它的书名、作者、出版社与封面")
             } header: {
                 Text("元数据管理")
-            }
-            
-            // 支持格式（信息展示）
-            Section {
-                InfoRow(title: "EPUB", value: "2.0 / 3.0")
-                InfoRow(title: "PDF", value: "✓")
-                InfoRow(title: "MOBI / AZW3", value: "✓")
-                InfoRow(title: "TXT", value: "✓")
-                InfoRow(title: "RTF / DOCX", value: "✓")
-                InfoRow(title: "HTML", value: "✓")
-                InfoRow(title: "CBZ / CBR", value: "漫画格式")
-            } header: {
-                Text("支持格式")
             } footer: {
-                Text("当前版本支持以上格式的电子书")
+                Text("改掉 EPUB 里写错或不想要的书名、作者与封面。只影响本机书库的显示，不会改动文件本身。")
             }
+
         }
         .modifier(CustomListModifier(title: "导入与格式"))
-        // 归一化无法识别的存量值（旧版本的 "overwrite"、外部导入的配置文件）。
-        // 不归一会让 Picker 停在"没有任何一行被选中"的状态——看起来像设置坏了。
+        .sheet(isPresented: $isEditingMetadata) {
+            BookMetadataLibraryView()
+        }
         .onAppear {
             guard DuplicateHandling(rawValue: settings.duplicateHandling) == nil else { return }
             settings.duplicateHandling = DuplicateHandling.skip.rawValue

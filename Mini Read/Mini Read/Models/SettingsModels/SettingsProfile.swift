@@ -200,20 +200,6 @@ enum SettingsProfileSchema {
         field("watermarkEnabled", \.watermarkEnabled),
         field("watermarkText", \.watermarkText),
 
-        // 5. 同步与备份
-        field("iCloudSync", \.iCloudSync),
-        field("syncProgress", \.syncProgress),
-        field("syncBookmarks", \.syncBookmarks),
-        field("syncNotes", \.syncNotes),
-        field("syncSettings", \.syncSettings),
-        field("syncBooks", \.syncBooks),
-        field("syncFrequency", \.syncFrequency),
-        field("syncOnWiFiOnly", \.syncOnWiFiOnly),
-        field("conflictResolution", \.conflictResolution),
-        field("autoBackup", \.autoBackup),
-        field("backupFrequency", \.backupFrequency),
-        field("backupLocation", \.backupLocation),
-
         // 8. 隐私与安全
         field("hideReadingHistory", \.hideReadingHistory),
         field("enablePrivateShelf", \.enablePrivateShelf),
