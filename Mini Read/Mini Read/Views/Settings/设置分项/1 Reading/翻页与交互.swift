@@ -27,8 +27,6 @@ struct PageTurningSettingsView: View {
                 }
             } header: {
                 Text("翻页方式")
-            } footer: {
-                Text("开启「降低动态效果」时自动改用连续滑动；iPad 双页模式固定使用仿真翻页。")
             }
             
             // 手势控制
@@ -36,8 +34,6 @@ struct PageTurningSettingsView: View {
                 Toggle("音量键翻页", isOn: $settings.volumeKeysTurn)
             } header: {
                 Text("手势控制")
-            } footer: {
-                Text("暂时接管音量键，无法调节音量，下拉控制中心可短暂解除")
             }
         }
         .modifier(CustomListModifier(title: "翻页与交互"))

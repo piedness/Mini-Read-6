@@ -30,7 +30,6 @@ struct iPadOSLibraryView: View {
             .padding(.top, 12)
             
             BookCardFlowView(sortOption: sortOption)
-                .padding(.vertical)
                 // 40pt：iPad 上网格贴着窗口边缘会显得局促，
                 // 也给右侧的浮动按钮留出视觉余量（Home 用的是同一个值）。
                 .padding(.horizontal, 40)

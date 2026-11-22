@@ -30,6 +30,8 @@ struct BookContentView: View {
     
     @State private var isShowBackArrow: Bool = false
     @State private var isShowContentPanel: Bool = false
+    /// 笔记编辑器的输入。nil = 没有正在编辑的标注。
+    @State private var annotationDraft: AnnotationDraft?
     @State private var toolbarHideTask: Task<Void, Never>?
     /// 阅读页出现前的系统 idle timer 状态；关闭阅读器/离开前台时原样恢复。
     @State private var previousIdleTimerDisabled: Bool?
@@ -54,7 +56,7 @@ struct BookContentView: View {
     /// `fullScreenCover` 的 zoom 转场静默窗。
     ///
     /// 为什么不直接在 `canOpenReader` 一变 true 就把阅读器建出来：
-    /// 那时 zoom 转场往往还在跑，于是「销毁 ProgressView」与「构造整套 UIKit
+    /// 那时 zoom 转场往往还在跑，于是「销毁加载页」与「构造整套 UIKit
     /// 页面层级」（`setupPageVC` + 音量键装配）撞进同一帧，主线程被占住，
     /// 转场动画掉帧。首次打开 EPUB 解析刚好落在这个窗口里，所以只有首次最明显。
     ///
@@ -70,8 +72,8 @@ struct BookContentView: View {
 
     /// 真正该显示阅读器的条件：数据就绪 **且** 转场已静默。
     ///
-    /// 两者缺一不可。早了 → 构造层级撞转场（掉帧）；晚了 → 白白多转一圈
-    /// ProgressView。而绝大多数小书解析在 100ms 内完成，静默窗几乎总是先满足，
+    /// 两者缺一不可。早了 → 构造层级撞转场（掉帧）；晚了 → 白白多停一屏
+    /// 加载页。而绝大多数小书解析在 100ms 内完成，静默窗几乎总是先满足，
     /// 不会让读者多等。
     private var shouldPresentReader: Bool {
         contentsViewModel.canOpenReader && hasTransitionSettled
@@ -136,6 +138,9 @@ struct BookContentView: View {
                     titleBySrc: contentsViewModel.titleBySrc,
                     tocJumpRequest: contentsViewModel.tocJumpRequest,
                     derivedVersion: contentsViewModel.derivedVersion,
+                    annotations: contentsViewModel.annotationSnapshots,
+                    annotationsVersion: contentsViewModel.annotationsVersion,
+                    annotationFocusRequest: contentsViewModel.annotationFocusRequest,
                     onChapterChange: { src in
                         contentsViewModel.selectBySrc(src)
                     },
@@ -160,14 +165,56 @@ struct BookContentView: View {
                                 contentsViewModel.markChapterReadIfNeeded(forSrc: src)
                             }
                         }
+                    },
+                    onHighlightSelection: { selection, style, color in
+                        contentsViewModel.addAnnotation(
+                            selection: selection,
+                            style: style,
+                            color: color
+                        )
+                    },
+                    onNoteSelection: { selection in
+                        // 选区已有标注时直接编辑那一条：既保留了原笔记，
+                        // 也避免保存时把看不见的旧内容覆盖掉。
+                        if let existing = contentsViewModel.annotation(overlapping: selection) {
+                            annotationDraft = AnnotationDraft(annotation: existing)
+                        } else {
+                            annotationDraft = AnnotationDraft(
+                                selection: selection,
+                                style: AnnotationStyle(rawValue: readerSettings.defaultAnnotationStyle) ?? .highlight,
+                                color: AnnotationColor(rawValue: readerSettings.defaultHighlightColor) ?? .yellow
+                            )
+                        }
+                    },
+                    onAnnotationActivate: { id in
+                        guard let annotation = contentsViewModel.annotation(id: id) else { return }
+                        annotationDraft = AnnotationDraft(annotation: annotation)
+                    },
+                    onDeleteAnnotation: { id in
+                        contentsViewModel.removeAnnotation(id: id)
+                    },
+                    onBackgroundTap: {
+                        // 点纸面：切换阅读控件；面板开着时顺手收起面板。
+                        // 与改造前 SwiftUI 的 simultaneousGesture 行为一致。
+                        toggleReaderChrome()
+                        if isShowContentPanel {
+                            setContentPanelVisible(false)
+                        }
                     }
                 )
-                .simultaneousGesture(TapGesture().onEnded {
-                    toggleReaderChrome()
-                    if isShowContentPanel {
-                        setContentPanelVisible(false)
-                    }
-                })
+                .sheet(item: $annotationDraft) { draft in
+                    AnnotationEditorView(
+                        draft: draft,
+                        onSave: { updated in
+                            if updated.isNew {
+                                contentsViewModel.addAnnotation(draft: updated)
+                            } else {
+                                contentsViewModel.updateAnnotation(draft: updated)
+                            }
+                            annotationDraft = nil
+                        }
+                    )
+                }
                 // 交叉淡入的关键：transition 挂在**各自内容**上，
                 // 动画则挂在下方 ZStack 这个共同祖先上。
                 // 缺任一边都不行——只有 transition 没有动画，等于硬切。
@@ -183,16 +230,27 @@ struct BookContentView: View {
                 )
                 .transition(.opacity)
             } else {
-                ProgressView()
-                    .controlSize(.large)
-                    .transition(.opacity)
+                // 打开中：一张与阅读页**同源**的纸面 + 按扉页规矩排的书名，
+                // 下方一道墨线弧说明还在动。
+                //
+                // 不用系统 `ProgressView`：它自带蓝灰配色、没有背景、也没有
+                // 书名，落在 zoom 转场上会先露出书库再「啪」地翻成纸色
+                // （暗纸面尤其像闪屏）。理由与度量见 `ReaderLoadingView`。
+                ReaderLoadingView(
+                    title: contentsViewModel.book.bookTitle,
+                    author: contentsViewModel.book.bookAuthor,
+                    // 与阅读器取同一个解析结论，加载页与第一页纸面逐像素一致。
+                    background: readerSettings.readingBackground,
+                    fontFamily: readerSettings.fontFamily
+                )
+                .transition(.opacity)
             }
             
             // 目录 float panel
             if isShowContentPanel {
                 //iPad 目录面板动画：
                 if isRegular{
-                    ElegantTOCPanel(viewModel: contentsViewModel) {
+                    ElegantTOCPanel(viewModel: contentsViewModel, showsAnnotationCount: readerSettings.showNoteCount) {
                         // ✅ 选章节后，带动画关闭面板
                         withAnimation(.spring(response: 0.5, dampingFraction: 1)) {
                             setContentPanelVisible(false)
@@ -225,7 +283,7 @@ struct BookContentView: View {
             get: { isShowContentPanel && !isRegular },
             set: { setContentPanelVisible($0) }
         )){
-            ElegantTOCPanel(viewModel: contentsViewModel) {
+            ElegantTOCPanel(viewModel: contentsViewModel, showsAnnotationCount: readerSettings.showNoteCount) {
                 // ✅ 选章节后，带动画关闭面板
                 withAnimation(.spring(response: 0.5, dampingFraction: 1)) {
                     setContentPanelVisible(false)

@@ -36,6 +36,9 @@ struct BookCardView: View {
         self.cardSize = cardSize
         self.book = book
         self.showsMetaRow = showsMetaRow
+        // 角标的初始可见状态就地取好，而不是等 `onAppear` 再补：
+        // 已在默认书单里的书，第一帧就该带着角标，不该空一帧、更不该弹一次。
+        _isFavoriteBadgeVisible = State(initialValue: Self.isFavorite(in: book))
     }
 
     /// 自适应模式：封面保持原始宽高比，宽度交给布局（网格列宽）决定。
@@ -43,6 +46,7 @@ struct BookCardView: View {
         self.cardSize = nil
         self.book = book
         self.showsMetaRow = showsMetaRow
+        _isFavoriteBadgeVisible = State(initialValue: Self.isFavorite(in: book))
     }
 
     @State private var isShowFullscreen: Bool = false
@@ -56,6 +60,85 @@ struct BookCardView: View {
 
     /// 元数据编辑面板（书名 / 作者 / 出版社 / 封面）。
     @State private var isEditingMetadata = false
+
+    // MARK: 收藏角标的出场
+    //
+    // 角标什么时候露脸，由**两个互不相干的因素**共同决定，所以拆成两层状态：
+    //
+    // 1. **数据**：这本书是不是在默认书单里（`isFavorite`）。
+    // 2. **场景**：现在是不是正在看这本书（`isShowFullscreen`）。
+    //
+    // 第一层不能直接驱动可见性。旧写法 `if isFavorite { favoriteBadge }` 让两者绑死：
+    // 菜单动作一执行，`isFavorite` 就在**同一帧**翻转，角标的缩放弹入于是和菜单收起
+    // 叠在一起——菜单还盖在封面上，这 0.3s 的动画整个被挡掉，用户看到的只是
+    // "菜单没了，角标已经在那儿了"，观感上就是"出现得太早、来得莫名其妙"。
+    // 现在数据照旧立刻变（可访问性、菜单文案都读它），可见状态晚一步跟上。
+    //
+    // 第二层是"让位"：点封面开书，封面 zoom 进阅读器，那枚心如果还亮着会跟着一起
+    // 被推进书里，像把书架上的标记带进了正文。开书淡出、合书淡回，书架才会回到
+    // 用户离开时的那一眼。
+
+    /// 角标当前是否可见（第一层：数据）。
+    @State private var isFavoriteBadgeVisible: Bool
+
+    /// 出场任务的代号。
+    ///
+    /// 每排一次队就 +1，任务睡醒后先比对自己的代号：对不上说明已经被后来的操作
+    /// 取代（点了收藏 → 立刻取消 → 再收藏），直接退出。
+    /// 比持有 `Task` 句柄更省心——不需要在每条返回路径上把句柄清干净，
+    /// 也就不会出现"句柄永远不为 nil、兜底同步被永久跳过"的僵尸态。
+    @State private var favoriteBadgeRevealToken = 0
+
+    /// 看书时角标是否已经让位（第二层：场景）。
+    ///
+    /// 只改透明度、不改布局：卡片高度、封面开本、网格排布都不受它影响，
+    /// 所以开关书不会引起书架重排。
+    @State private var isFavoriteBadgeFadedForReader = false
+
+    /// 让位/归位任务的代号，作用同 `favoriteBadgeRevealToken`：
+    /// 快速开关书时，旧的"归位"任务醒来对不上号就自己退出，不会把角标提前点亮。
+    @State private var favoriteBadgeReaderToken = 0
+
+    /// 菜单收完之后再等多久才让角标露脸。
+    ///
+    /// 系统 context menu 的收起动画约 0.2s。取 0.24s 是让角标正好在菜单落定的
+    /// 那一刻弹入——因果连得上，又不会和那一下点按脱节（≥0.4s 就会像卡了一下才补上）。
+    private static let favoriteBadgeRevealDelay: Duration = .milliseconds(240)
+
+    /// 合上书之后，等 zoom 把封面送回原位，再让角标浮出来。
+    ///
+    /// 阅读器的收起转场约 0.4s。若角标从 0s 就开始淡入，它整个淡入过程都被
+    /// 那层正在回落的封面盖住，等封面落定，角标已经"啪"地在那儿了——
+    /// 用户要的"缓缓出现"根本看不见。等 0.25s，让封面先落位，再从容淡入。
+    private static let favoriteBadgeReturnDelay: Duration = .milliseconds(250)
+
+    // MARK: 封面位图
+    //
+    // 封面**不在 `body` 里读盘**。旧写法把 `UIImage(contentsOfFile:)` 直接写在
+    // `body` 的 `if let` 里，等于"卡片每重绘一次就重新读一遍盘、新建一张未解码的
+    // UIImage"。而「存封面到相册」这条链路里卡片至少要重绘三次：菜单收起 →
+    // 成功勾出现 → 1.4s 后勾消失。每次重绘都换掉图片内容，未解码的那几帧就是空白，
+    // 观感正是"封面闪几下"。
+    //
+    // 现在：`body` 只做内存缓存查询（O(1)），真正读盘交给 `.task` 在后台做一次。
+    // 复用 `CoverThumbnail`（ImageIO 降采样 + NSCache），与书单拼图、列表缩略图
+    // 共用同一份缓存与同一套降采样参数，不再有第二套封面加载实现。
+    @State private var coverState: CoverState = .loading
+
+    private enum CoverState {
+        case loading
+        case loaded(UIImage)
+        /// 文件缺失或解码失败——与"本来就没有封面"同样处理。
+        case unavailable
+    }
+
+    /// 单张封面的解码预算。
+    ///
+    /// 网格列宽约 166pt，@3x 下 498px；取 1000 是给 zoom 转场放大留的余量，
+    /// 同时把单张解码位图压在 2.7MB 左右（缓存有 96MB 字节预算兜底）。
+    private static let coverPixelBudget: CGFloat = 1000
+
+    private var coverURL: URL? { book.coverImageURLs.first }
 
     // MARK: 存封面的反馈
     //
@@ -80,63 +163,114 @@ struct BookCardView: View {
     @State private var pendingDeleteTitle: String = ""
 
     var body: some View {
-        Group {
-            if let firstURL = book.coverImageURLs.first,
-               let uiImage = UIImage(contentsOfFile: firstURL.path) {
-                coverCard(Image(uiImage: uiImage), saveSource: uiImage)
-            } else if let placeholder = UIImage(named: "coverTest1") {
-                // 无封面兜底：占位图走同一条卡片路径，行为（含保存、删除）与真实封面一致
-                coverCard(Image(uiImage: placeholder), saveSource: placeholder)
+        // 无封面兜底：占位图走同一条卡片路径，行为（含保存、删除）与真实封面一致。
+        // 位图尚未到位时传 nil，卡片画一块同开本的骨架（见 `sizedCover`）。
+        coverCard(displayedCover.map(Image.init(uiImage:)))
+            .task(id: coverURL) { await loadCover() }
+            .alert("删除「\(pendingDeleteTitle)」？", isPresented: $showDeleteConfirmation) {
+                Button("删除", role: .destructive) { performDelete() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("这本书将从你的书库中移除。")
             }
+            // 刻意挂在 `body` 这一层、而不是 `coverCard` 里：
+            // 「加入书单」的 sheet 挂在卡片 VStack 上，两个 sheet 修饰器落在同一节点时
+            // SwiftUI 只会保留最后一个。分挂两处，两个面板各自都能正常弹出。
+            .sheet(isPresented: $isEditingMetadata) {
+                BookMetadataLibraryView(initialBook: book)
+            }
+    }
+
+    // MARK: - 封面加载
+
+    /// 当前该显示的封面位图。
+    ///
+    /// 三条来源按优先级：已加载的结果 → 内存缓存命中 → 占位图。
+    /// **三条都不碰磁盘**，所以卡片重绘多少次都不会再出现空白帧；
+    /// 首帧就能命中缓存，也不会闪一下占位图。
+    private var displayedCover: UIImage? {
+        switch coverState {
+        case .loaded(let image):
+            return image
+        case .unavailable:
+            return UIImage(named: "coverTest1")
+        case .loading:
+            guard let coverURL else { return UIImage(named: "coverTest1") }
+            return CoverThumbnail.cachedNatural(url: coverURL, maxPixel: Self.coverPixelBudget)
         }
-        .alert("删除「\(pendingDeleteTitle)」？", isPresented: $showDeleteConfirmation) {
-            Button("删除", role: .destructive) { performDelete() }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("这本书将从你的书库中移除。")
+    }
+
+    /// 封面开本（宽 / 高）。
+    ///
+    /// 图还没到位时也要给出正确比例：骨架与真封面形状一致，图一到位才不会
+    /// 引起整行高度跳动。所以未加载时读文件头（只解析尺寸、不解码像素）。
+    private var coverAspect: CGFloat {
+        if case .loaded(let image) = coverState { return naturalAspect(of: image) }
+        guard let coverURL, let aspect = CoverThumbnail.aspect(url: coverURL) else {
+            return 2.0 / 3.0
         }
-        // 刻意挂在 `body` 这一层、而不是 `coverCard` 里：
-        // 「加入书单」的 sheet 挂在卡片 VStack 上，两个 sheet 修饰器落在同一节点时
-        // SwiftUI 只会保留最后一个。分挂两处，两个面板各自都能正常弹出。
-        .sheet(isPresented: $isEditingMetadata) {
-            BookMetadataLibraryView(initialBook: book)
+        return aspect
+    }
+
+    /// 读一次盘，把封面位图放进 `@State`。之后所有重绘都只读这份状态。
+    private func loadCover() async {
+        guard let coverURL else {
+            coverState = .unavailable
+            return
         }
 
+        let budget = Self.coverPixelBudget
+
+        // 内存命中（切回书库、横竖屏切换、卡片被复用）直接上屏，不走后台任务
+        if let hit = CoverThumbnail.cachedNatural(url: coverURL, maxPixel: budget) {
+            coverState = .loaded(hit)
+            return
+        }
+
+        let loaded = await Task.detached(priority: .userInitiated) {
+            CoverThumbnail.natural(url: coverURL, maxPixel: budget)
+        }.value
+
+        // `.task(id:)` 在封面被替换时会取消旧任务：别让旧图盖掉新图
+        guard !Task.isCancelled else { return }
+        coverState = loaded.map(CoverState.loaded) ?? .unavailable
     }
 
     // MARK: - 封面卡片
 
     /// 尺寸策略 + 精装质感 + 封面下方元信息 + 打开阅读器 + 上下文菜单。
-    /// 真实封面与占位图共用同一条路径，两种模式的行为不会再漂移。
-    private func coverCard(_ image: Image, saveSource: UIImage) -> some View {
+    /// 真实封面、占位图、加载骨架共用同一条路径，两种模式的行为不会再漂移。
+    private func coverCard(_ image: Image?) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            sizedCover(image, of: saveSource)
+            sizedCover(image)
                 .premiumHardcoverStyle()
                 .matchedTransitionSource(id: "bookContent", in: bookanimation)
                 // 封面本身没有文字可念，显式给书名，VoiceOver 才不会读出一片空白
                 .accessibilityLabel(book.bookTitle)
-                // 收藏角标。既是"刚才那一下生效了"的即时反馈，也是长期可见的状态——
-                // 没有它的话，用户点完 Favorite 从书架上完全看不出区别。
                 .overlay(alignment: .topTrailing) {
-                    if isFavorite {
+                    if isFavoriteBadgeVisible {
                         favoriteBadge
+                            .opacity(isFavoriteBadgeFadedForReader ? 0 : 1)
                     }
                 }
-                .animation(
-                    reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.62),
-                    value: isFavorite
-                )
                 // 存封面的成功反馈：菜单已关闭，所以画在封面上才看得见。
                 .overlay {
-                    if isShowingCoverSaved {
-                        coverSavedBadge
+                    ZStack {
+                        if isShowingCoverSaved {
+                            coverSavedBadge
+                        }
                     }
+                    .animation(
+                        reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.66),
+                        value: isShowingCoverSaved
+                    )
                 }
 
             if showsMetaRow {
                 BookProgressAuthorRow(progress: book.readingProgress, author: book.bookAuthor)
             }
         }
+        .padding(5)
         // 整张卡片合成一个可访问性元素：一次划过读出
         // 「书名，阅读进度 45%，作者 某某」并提示可点按，而不是散成三块碎片。
         .accessibilityElement(children: .combine)
@@ -146,9 +280,21 @@ struct BookCardView: View {
             // 勾号是"一次性"反馈，留在封面上会变成第二个常驻图标，反而看不懂。
             guard isShowingCoverSaved else { return }
             try? await Task.sleep(for: .seconds(1.4))
-            withAnimation(.easeOut(duration: 0.25)) {
-                isShowingCoverSaved = false
-            }
+            isShowingCoverSaved = false
+        }
+        .onChange(of: isFavorite) { _, favorite in
+            syncFavoriteBadge(to: favorite)
+        }
+        // 开书/合书：角标让位与归位。`isShowFullscreen` 在点封面那一刻就翻 true、
+        // 在阅读器 dismiss 的那一刻翻回 false，正好是两段转场的起点。
+        .onChange(of: isShowFullscreen) { _, isPresented in
+            syncFavoriteBadgeForReader(isPresented: isPresented)
+        }
+        .onAppear {
+            // 兜底：卡片被复用或重新上屏时，数据可能已经在别处改过、而这里没收到
+            // onChange。首帧不会闪——`init` 已经按同一判据取好了初始值，
+            // 这里通常是一次等值赋值，什么都不会发生。
+            isFavoriteBadgeVisible = isFavorite
         }
         .alert("无法存储封面", isPresented: $isShowingCoverSaveError) {
             if coverSaveFailureNeedsSettings {
@@ -194,7 +340,7 @@ struct BookCardView: View {
             }
             
             Button {
-                saveCoverToPhotos(saveSource)
+                saveCoverToPhotos()
             } label: {
                 Label("Save Cover", systemImage: "photo.badge.arrow.down.fill")
             }
@@ -220,19 +366,52 @@ struct BookCardView: View {
     /// - 自适应模式：resizable + aspectRatio(.fit)——LazyVGrid 只约束列宽、不约束高，
     ///   于是封面宽度吃满列、高度按原图比例自然得出，整行底部对齐
     ///   （配合 GridItem 的 alignment: .bottom）。
-    private func sizedCover(_ image: Image, of source: UIImage) -> some View {
-        Group {
-            if let size = cardSize {
-                image
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: size.width, height: size.height)
-            } else {
-                image
-                    .resizable()
-                    .aspectRatio(naturalAspect(of: source), contentMode: .fit)
+    ///
+    /// 位图为 `nil`（还没加载出来）时画一块**同开本**的骨架，而不是留空或临时
+    /// 换成 2:3：形状与最终封面一致，图一到位不会引起整行重排。
+    ///
+    /// 这里**不裁圆角、不加阴影**：两者都由 `premiumHardcoverStyle()` 统一提供
+    /// （见 `coverCard`）。两处各写一份，就会出现「10pt 裁切套着 4pt 书槽」
+    /// 和两层影叠加的问题。
+    @ViewBuilder
+    private func sizedCover(_ image: Image?) -> some View {
+        if let size = cardSize {
+            coverContent(image)
+                .scaledToFill()
+                .frame(width: size.width, height: size.height)
+        } else {
+            coverContent(image)
+                .aspectRatio(coverAspect, contentMode: .fit)
+        }
+    }
+
+    @ViewBuilder
+    private func coverContent(_ image: Image?) -> some View {
+        if let image {
+            image.resizable()
+        } else {
+            ZStack {
+
+                // 纯色块，圆角交给 `premiumHardcoverStyle()` 裁：
+                // 占位块自己再写一个半径，改精装圆角时就会漏改这一处。
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+
+                // 图形只在**确实没有封面**时出现：加载中画图标会闪一下，
+                // 反而更像故障。
+                if isCoverUnavailable {
+                    Image(systemName: "book.closed")
+                        .font(.system(size: 24, weight: .light))
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
+    }
+
+    /// 封面确定取不到了（文件缺失 / 解码失败），不是"还在加载"。
+    private var isCoverUnavailable: Bool {
+        if case .unavailable = coverState { return true }
+        return false
     }
 
     /// 原图宽高比。异常数据（宽或高为 0）回退到 2:3 的常规书衣开本。
@@ -251,8 +430,18 @@ struct BookCardView: View {
     /// 关系遍历是 O(该书所属书单数)，通常 0–3 条。
     ///
     /// 关系变更的观察已实测：从 `collection.books` 一侧增删，`book.collections` 的
-    /// `withObservationTracking` 回调会触发，所以角标能跟着动画即时出现/消失。
+    /// `withObservationTracking` 回调会触发，所以角标能跟着状态出现/消失。
+    /// （出现要晚一步才上屏，那是 `syncFavoriteBadge(to:)` 的时机策略，与本判据无关。）
     private var isFavorite: Bool {
+        Self.isFavorite(in: book)
+    }
+
+    /// 「这本书在默认书单里」的唯一判据。
+    ///
+    /// 抽成 static 是为了让 `init` 也能用它取角标的初始可见状态——
+    /// 否则 `init` 里得再写一遍 `book.collections.contains { $0.isDefault }`，
+    /// 两处判据一旦分叉，角标和菜单文案就会互相打脸。
+    private static func isFavorite(in book: bookItem) -> Bool {
         book.collections.contains { $0.isDefault }
     }
 
@@ -277,6 +466,97 @@ struct BookCardView: View {
     }
 
     // MARK: - 角标
+
+    /// 让角标的可见状态跟上数据状态，出场时机就在这里定。
+    ///
+    /// - **收藏**：延后 `favoriteBadgeRevealDelay` 再弹。菜单收起要 0.2s 左右，
+    ///   同一帧插入的话入场动画会被菜单的淡出整个盖住（详见文件上方注释）。
+    /// - **取消收藏**：立刻消失，不等。移除的反馈就是"它不在了"，
+    ///   拖半秒反而像点了没反应。
+    ///
+    /// 用 `Task` 而不是 `DispatchQueue.main.asyncAfter`：后者没法作废，
+    /// 快速连点时会留下一个到点就把角标点亮、却和当前状态对不上的旧任务。
+    private func syncFavoriteBadge(to favorite: Bool) {
+        // 作废所有在途的出场任务（代号一变，它们醒来就对不上号）
+        favoriteBadgeRevealToken &+= 1
+        let token = favoriteBadgeRevealToken
+
+        guard favorite else {
+            withAnimation(badgeDismissAnimation) {
+                isFavoriteBadgeVisible = false
+            }
+            return
+        }
+
+        // 已经亮着（例如从「加入书单」面板里改了归属又回来）就不必再排一次队
+        guard !isFavoriteBadgeVisible else { return }
+
+        Task { @MainActor in
+            try? await Task.sleep(for: Self.favoriteBadgeRevealDelay)
+            // 睡醒先验票：这期间用户可能又切了一次
+            guard token == favoriteBadgeRevealToken else { return }
+            withAnimation(badgeRevealAnimation) {
+                isFavoriteBadgeVisible = true
+            }
+        }
+    }
+
+    /// 出场：与原来的弹入曲线一致，只是晚一步。
+    private var badgeRevealAnimation: Animation? {
+        reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.62)
+    }
+
+    /// 退场：短促淡出，不用弹簧。它是在"撤销"，不该有庆祝感。
+    private var badgeDismissAnimation: Animation? {
+        reduceMotion ? nil : .easeOut(duration: 0.16)
+    }
+
+    // MARK: 看书时让位
+
+    /// 开书让位 / 合书归位。
+    ///
+    /// 和 `syncFavoriteBadge(to:)` 是两套独立状态，互不覆盖：
+    /// - 那个管"这本书是不是收藏"（数据），出场带一点弹性，是"记下了"的语气；
+    /// - 这个管"现在是不是在看书"（场景），**只动透明度**——不位移、不缩放。
+    ///   翻书时书架上的装饰不该有任何动作来抢注意力，淡进淡出是最安静的做法。
+    ///
+    /// 合书这一侧要等：收起转场约 0.4s，封面正盖在卡片上方往回落，
+    /// 角标若从 0s 就开始淡入，整个淡入过程都在那层封面底下，等于白淡。
+    /// 等 0.25s 让封面先落位，再花 0.5s 缓缓浮出来。
+    private func syncFavoriteBadgeForReader(isPresented: Bool) {
+        favoriteBadgeReaderToken &+= 1
+        let token = favoriteBadgeReaderToken
+
+        guard !isPresented else {
+            // 开书：立刻开始淡出，赶在 zoom 把封面推走之前退干净。
+            withAnimation(badgeFadeOutForReaderAnimation) {
+                isFavoriteBadgeFadedForReader = true
+            }
+            return
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(for: Self.favoriteBadgeReturnDelay)
+            // 这期间又开了一次书？那这次归位就作废
+            guard token == favoriteBadgeReaderToken else { return }
+            withAnimation(badgeReturnForReaderAnimation) {
+                isFavoriteBadgeFadedForReader = false
+            }
+        }
+    }
+
+    /// 让位：比转场略快，封面被推走时角标已经淡干净。
+    private var badgeFadeOutForReaderAnimation: Animation {
+        reduceMotion ? .easeOut(duration: 0.2) : .easeOut(duration: 0.3)
+    }
+
+    /// 归位：慢、匀，是"浮回来"而不是"弹回来"。
+    ///
+    /// 这一层即便开了「减弱动态效果」也保留淡入——透明度变化不是前庭刺激，
+    /// 不属于该系统设置要压制的那类动效，只是把时长压短。
+    private var badgeReturnForReaderAnimation: Animation {
+        reduceMotion ? .easeOut(duration: 0.2) : .easeInOut(duration: 0.5)
+    }
 
     /// 收藏角标：白心 + 半透明黑底。
     ///
@@ -311,40 +591,62 @@ struct BookCardView: View {
     ///
     /// 三步都要：
     /// 1. **显式请求 add-only 权限**——没权限时直接写会静默失败，用户只会觉得"点了没反应"；
-    /// 2. `performChanges` 的回调里拿成功/失败——旧实现传了三个 `nil`，成功失败都无声；
+    /// 2. `performChanges` 的结果决定成功还是失败——旧实现传了三个 `nil`，成功失败都无声；
     /// 3. 成功画勾 + 成功触觉，失败弹 alert（权限问题额外给「去设置」）。
-    private func saveCoverToPhotos(_ image: UIImage) {
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
-            Task { @MainActor in
-                guard status == .authorized || status == .limited else {
-                    presentCoverSaveFailure(
-                        "没有相册写入权限。请到「设置 → 隐私与安全性 → 照片」里允许本 App 添加照片。",
-                        needsSettings: true
-                    )
-                    return
-                }
-
-                PHPhotoLibrary.shared().performChanges {
-                    PHAssetChangeRequest.creationRequestForAsset(from: image)
-                } completionHandler: { success, error in
-                    Task { @MainActor in
-                        guard success else {
-                            presentCoverSaveFailure(
-                                error?.localizedDescription ?? "无法把封面写入相册。",
-                                needsSettings: false
-                            )
-                            return
-                        }
-
-                        triggerNotificationHaptic(.success)
-                        withAnimation(reduceMotion ? .easeOut(duration: 0.15)
-                                                   : .spring(response: 0.32, dampingFraction: 0.66)) {
-                            isShowingCoverSaved = true
-                        }
-                    }
-                }
+    ///
+    /// 写进相册的是**原图**，不是网格里那张降采样缩略图：用户点"存储封面"
+    /// 要的是一张能用的图，给他一张 1000px 的缩略图等于给了一张糊图。
+    private func saveCoverToPhotos() {
+        Task {
+            guard let image = await fullSizeCover() else {
+                presentCoverSaveFailure("找不到这本书的封面文件，无法保存。", needsSettings: false)
+                return
             }
+
+            let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard status == .authorized || status == .limited else {
+                presentCoverSaveFailure(
+                    "没有相册写入权限。请到「设置 → 隐私与安全性 → 照片」里允许本 App 添加照片。",
+                    needsSettings: true
+                )
+                return
+            }
+
+            do {
+                try await PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.creationRequestForAsset(from: image)
+                }
+            } catch {
+                let message = error.localizedDescription
+                presentCoverSaveFailure(message.isEmpty ? "无法把封面写入相册。" : message,
+                                        needsSettings: false)
+                return
+            }
+
+            triggerNotificationHaptic(.success)
+            // 动画交给封面上的 `.animation(value:)`，这里只改状态：
+            // 用 `withAnimation` 会把整张卡片（含离屏合成的精装层）拖进同一事务。
+            isShowingCoverSaved = true
         }
+    }
+
+    /// 相册用的原图。
+    ///
+    /// 后台只读字节（`Data` 是 Sendable，`UIImage` 不是），回到主线程再建壳：
+    /// `UIImage(data:)` 是懒解码，真正的解码发生在 `performChanges` 自己的队列上，
+    /// 不会把几十毫秒的解码压在主线程。
+    private func fullSizeCover() async -> UIImage? {
+        guard let coverURL else {
+            // 没有封面文件的兜底书：存的就是卡片上那张占位图
+            return UIImage(named: "coverTest1")
+        }
+
+        let data = await Task.detached(priority: .userInitiated) {
+            try? Data(contentsOf: coverURL, options: .mappedIfSafe)
+        }.value
+
+        guard let data else { return nil }
+        return UIImage(data: data)
     }
 
     private func presentCoverSaveFailure(_ message: String, needsSettings: Bool) {

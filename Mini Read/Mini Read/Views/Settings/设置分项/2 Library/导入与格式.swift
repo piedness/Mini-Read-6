@@ -28,8 +28,6 @@ struct ImportFormatSettingsView: View {
                 }
             } header: {
                 Text("导入设置")
-            } footer: {
-                Text("按文件内容判断是否重复（同一本书改文件名也认得）：\n跳过——已在书库中，不重复添加；\n保留两者——两本都存在，各自独立。")
             }
             
             // 元数据管理
@@ -42,8 +40,6 @@ struct ImportFormatSettingsView: View {
                 .accessibilityHint("选择一本书，修改它的书名、作者、出版社与封面")
             } header: {
                 Text("元数据管理")
-            } footer: {
-                Text("改掉 EPUB 里写错或不想要的书名、作者与封面。只影响本机书库的显示，不会改动文件本身。")
             }
 
         }

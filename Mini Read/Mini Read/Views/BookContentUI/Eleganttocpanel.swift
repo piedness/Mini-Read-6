@@ -2,13 +2,14 @@ import SwiftUI
 
 // MARK: - 页签
 
-/// 目录面板的两个页签。
+/// 目录面板的三个页签：目录 / 书签 / 笔记。
 ///
-/// 「笔记」暂不进入页签：笔记系统还是空壳（见项目审计 N11），
-/// 放一个点了没内容的页签比不放更糟。
+/// 笔记页签与阅读器里的标注共享同一份 SwiftData 记录：
+/// 列表里删掉一条，正文里的高亮会在下一次版本下发时消失。
 private enum TOCPanelTab: Hashable {
     case contents
     case bookmarks
+    case notes
 }
 
 // MARK: - 顶级优雅目录面板 (The Integrated Premium Panel)
@@ -16,6 +17,9 @@ struct ElegantTOCPanel: View {
     // 注入你设计的标准 ObservableObject ViewModel
     @ObservedObject var viewModel: ContentsPanelViewModel
     @State private var selectedTab: TOCPanelTab = .contents
+
+    /// 设置 → 笔记系统 → 显示笔记计数。
+    var showsAnnotationCount: Bool = true
     
     // ✅ 新增：章节选中回调
     var onChapterSelected: (() -> Void)? = nil
@@ -34,13 +38,15 @@ struct ElegantTOCPanel: View {
                 .padding(.horizontal, 28)
                 .padding(.bottom, 20)
             
-            // 2. 页签：目录 / 书签
+            // 2. 页签：目录 / 书签 / 笔记
             //
-            // 书签数量直接挂在页签上：读者打开面板的第一眼就知道
+            // 数量直接挂在页签上：读者打开面板的第一眼就知道
             // "这本书我标了几处"，不必先切过去数一遍。
             TOCPanelTabBar(
                 selection: $selectedTab,
-                bookmarkCount: viewModel.bookmarks.count
+                bookmarkCount: viewModel.bookmarks.count,
+                annotationCount: viewModel.annotations.count,
+                showsAnnotationCount: showsAnnotationCount
             )
             .padding(.horizontal, 28)
             .padding(.bottom, 12)
@@ -49,8 +55,11 @@ struct ElegantTOCPanel: View {
             if selectedTab == .contents {
                 contentsSection
                     .transition(.opacity)
-            } else {
+            } else if selectedTab == .bookmarks {
                 bookmarksSection
+                    .transition(.opacity)
+            } else {
+                annotationsSection
                     .transition(.opacity)
             }
         }
@@ -158,6 +167,47 @@ struct ElegantTOCPanel: View {
         }
     }
     
+    // MARK: - 笔记页签
+
+    @ViewBuilder
+    private var annotationsSection: some View {
+        if viewModel.annotations.isEmpty {
+            TOCAnnotationsEmptyView()
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(viewModel.annotations) { annotation in
+                        AnnotationRow(annotation: annotation, viewModel: viewModel) {
+                            onChapterSelected?()
+                        }
+                    }
+
+                    // 导出放在列表末尾而不是顶部工具栏：
+                    // 它是低频动作，不该和"找一条笔记"抢同一块视觉空间。
+                    ShareLink(item: viewModel.annotationsMarkdown()) {
+                        Label("导出全部标注", systemImage: "square.and.arrow.up")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.secondary)
+                            .padding(.vertical, 12)
+                    }
+                    .accessibilityHint("以 Markdown 分享这本书的全部标注")
+
+                    // 长按删除不是自解释的手势，给一行极轻的提示；
+                    // VoiceOver 侧另有命名动作，故对读屏隐藏这行。
+                    Text("轻点跳转 · 长按删除")
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundColor(.secondary.opacity(0.7))
+                        .accessibilityHidden(true)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 32)
+            }
+            .scrollIndicators(.hidden)
+            .transition(.opacity)
+        }
+    }
+
     // MARK: - 当前阅读位置定位
     
     /// 优先使用 ViewModel 已同步的选中 id；若尚未同步，则退回到 currentSrc。
@@ -243,11 +293,14 @@ struct ElegantTOCPanel: View {
 private struct TOCPanelTabBar: View {
     @Binding var selection: TOCPanelTab
     let bookmarkCount: Int
+    let annotationCount: Int
+    let showsAnnotationCount: Bool
     
     var body: some View {
         HStack(spacing: 0) {
             segment(.contents, title: "目录", count: nil)
             segment(.bookmarks, title: "书签", count: bookmarkCount)
+            segment(.notes, title: "笔记", count: showsAnnotationCount ? annotationCount : nil)
         }
         .padding(4)
         .background(
@@ -553,13 +606,6 @@ private struct TOCBookmarksEmptyView: View {
             Text("还没有书签")
                 .font(.system(size: 15, weight: .semibold, design: .serif))
                 .foregroundColor(.primary.opacity(0.85))
-            
-            Text("阅读时轻点纸面调出控件，再点书签按钮，即可把当前页加入书签。")
-                .font(.system(size: 12, weight: .regular))
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .lineSpacing(3)
-                .padding(.horizontal, 40)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.bottom, 40)

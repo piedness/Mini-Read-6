@@ -52,6 +52,23 @@ final class ContentsPanelViewModel: ObservableObject {
     /// 当前可见页的位置快照。nil = 当前页不可锚定（扉页 / 空白页 / 尚未上屏）。
     @Published private(set) var currentLocation: ReaderLocation?
 
+    // MARK: - 标注状态
+
+    /// 本书全部标注，按**阅读顺序**排列（目录次序 → 章节内字符偏移）。
+    @Published private(set) var annotations: [ReaderAnnotation] = []
+
+    /// 下发给阅读器的值类型快照。与 `annotations` 同批产出：
+    /// UIKit 绘制层只吃值类型，不碰 SwiftData 对象。
+    @Published private(set) var annotationSnapshots: [AnnotationSnapshot] = []
+
+    /// 标注快照的版本号。刻意**不**加 `@Published`：它总是与
+    /// `annotationSnapshots` 同时更新，后者已经会带动视图重算；
+    /// 这里再广播一次只是白白多一轮。
+    private(set) var annotationsVersion: Int = 0
+
+    /// 从笔记列表跳转后的聚焦请求（让目标标注闪一下）。
+    @Published private(set) var annotationFocusRequest: AnnotationFocusRequest?
+
     /// 当前页是否已有书签。书签按钮的填充态与"轻点移除"都依赖它。
     var isCurrentPageBookmarked: Bool {
         guard let location = currentLocation else { return false }
@@ -154,6 +171,8 @@ final class ContentsPanelViewModel: ObservableObject {
         // 书签只读一次：列表与「当前页是否已加书签」都靠它。
         // 放在目录解析之后——排序要用 `srcOrder`，早于它拿不到阅读顺序。
         refreshBookmarks()
+        // 标注同理：一次读全，按 src 分组后下发给阅读器。
+        refreshAnnotations()
         // 这里不再 save：以上写入都经 `writeThroughGate` 登记，
         // 由 `openWriteGateAndCommit()` 在第一页上屏时统一提交。
         isLoading = false
@@ -762,6 +781,199 @@ final class ContentsPanelViewModel: ObservableObject {
         if lhs.characterOffset != rhs.characterOffset {
             return lhs.characterOffset < rhs.characterOffset
         }
+        return lhs.createdAt < rhs.createdAt
+    }
+
+    // MARK: - 标注
+
+    func annotation(id: UUID) -> ReaderAnnotation? {
+        annotations.first { $0.annotationID == id }
+    }
+
+    /// 与一次选区重叠的已有标注。
+    ///
+    /// 「添加笔记」必须先查这一步：否则编辑器拿到的是一张空白草稿，
+    /// 保存时会把已有笔记静默覆盖掉——读者看不到自己原来写了什么。
+    func annotation(overlapping selection: ReaderTextSelection) -> ReaderAnnotation? {
+        annotations.first {
+            $0.src == selection.src
+                && NSIntersectionRange($0.range, selection.range).length > 0
+        }
+    }
+
+    /// 新建一处高亮 / 笔记。
+    ///
+    /// 与已有标注重叠时**不新建**，而是更新已有那条的样式/颜色/笔记：
+    /// 同一段文字叠两层半透明色块既难读，点击时也无法判断读者想编辑哪一条。
+    /// 这与 Apple Books「一处文字只有一条标注」的行为一致。
+    func addAnnotation(
+        selection: ReaderTextSelection,
+        style: AnnotationStyle,
+        color: AnnotationColor,
+        note: String = ""
+    ) {
+        guard !isDiscarded, selection.range.length > 0 else { return }
+
+        if let existing = annotations.first(where: {
+            $0.src == selection.src
+                && NSIntersectionRange($0.range, selection.range).length > 0
+        }) {
+            // 新选区完整包住旧标注时扩展到新范围：读者显然想把整段都标上。
+            // 部分重叠、或新选区落在旧标注内部时保留旧范围，只更新样式/颜色/笔记。
+            if NSUnionRange(existing.range, selection.range) == selection.range {
+                existing.charStart = selection.range.location
+                existing.charLength = selection.range.length
+                existing.quote = selection.quote
+            }
+            existing.styleRaw = style.rawValue
+            existing.colorRaw = color.rawValue
+            if !note.isEmpty { existing.note = note }
+            existing.updatedAt = .now
+            saveAnnotations()
+            refreshAnnotations()
+            return
+        }
+
+        let annotation = ReaderAnnotation(
+            bookKey: book.bookExtrSubdir.path,
+            src: selection.src,
+            charStart: selection.range.location,
+            charLength: selection.range.length,
+            quote: selection.quote,
+            note: note,
+            style: style,
+            color: color,
+            chapterTitle: selection.chapterTitle
+        )
+        modelContext.insert(annotation)
+        book.annotations.append(annotation)
+        saveAnnotations()
+        refreshAnnotations()
+    }
+
+    func addAnnotation(draft: AnnotationDraft) {
+        guard let range = draft.range else { return }
+        addAnnotation(
+            selection: ReaderTextSelection(
+                src: draft.src,
+                range: range,
+                quote: draft.quote,
+                chapterTitle: draft.chapterTitle
+            ),
+            style: draft.style,
+            color: draft.color,
+            note: draft.note
+        )
+    }
+
+    func updateAnnotation(draft: AnnotationDraft) {
+        guard !isDiscarded,
+              let id = draft.annotationID,
+              let annotation = annotation(id: id)
+        else { return }
+
+        annotation.note = draft.note.trimmingCharacters(in: .newlines)
+        annotation.styleRaw = draft.style.rawValue
+        annotation.colorRaw = draft.color.rawValue
+        annotation.updatedAt = .now
+        saveAnnotations()
+        refreshAnnotations()
+    }
+
+    func removeAnnotation(id: UUID) {
+        guard !isDiscarded, let annotation = annotation(id: id) else { return }
+        book.annotations.removeAll { $0.annotationID == id }
+        modelContext.delete(annotation)
+        saveAnnotations()
+        refreshAnnotations()
+    }
+
+    /// 从笔记列表跳转。只发字符锚点，页码由阅读器按当前排版解析。
+    func jumpToAnnotation(_ annotation: ReaderAnnotation) {
+        if let subID = srcToSubID[annotation.src] {
+            updateSelection(src: annotation.src, id: subID)
+        } else {
+            currentSrc = annotation.src
+            book.lastReadSrc = annotation.src
+            persistDebounced()
+        }
+
+        tocJumpRequest = TOCJumpRequest(
+            id: UUID(),
+            src: annotation.src,
+            characterOffset: annotation.charStart
+        )
+        annotationFocusRequest = AnnotationFocusRequest(
+            id: UUID(),
+            annotationID: annotation.annotationID
+        )
+    }
+
+    /// 导出 Markdown。放在 ViewModel 而不是 View 里：
+    /// 排序、章节标题、笔记格式都属于「数据怎么组织」，与视图无关。
+    func annotationsMarkdown() -> String {
+        guard !annotations.isEmpty else { return "" }
+
+        var lines: [String] = [
+            "# \(book.bookTitle)",
+            "",
+            "> 共 \(annotations.count) 处标注",
+            ""
+        ]
+
+        var lastSrc: String?
+        for annotation in annotations {
+            if annotation.src != lastSrc {
+                let title = annotation.chapterTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                lines.append("## \(title.isEmpty ? "未命名章节" : title)")
+                lines.append("")
+                lastSrc = annotation.src
+            }
+
+            let quote = annotation.quote
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespaces)
+            lines.append("> \(quote)")
+            lines.append("")
+
+            if annotation.hasNote {
+                lines.append(annotation.note)
+                lines.append("")
+            }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func saveAnnotations() {
+        do {
+            try modelContext.save()
+        } catch {
+            print("[ViewModel] ⚠️ 标注保存失败: \(error)")
+        }
+    }
+
+    /// 重新拉取本书标注并排序。
+    ///
+    /// 走 fetch 而不是直接读 `book.annotations`：关系数组的顺序由 SwiftData 决定，
+    /// 而列表必须按阅读顺序呈现（与书签同一套理由）。
+    private func refreshAnnotations() {
+        let key = book.bookExtrSubdir.path
+        let descriptor = FetchDescriptor<ReaderAnnotation>(
+            predicate: #Predicate { $0.bookKey == key }
+        )
+
+        annotations = ((try? modelContext.fetch(descriptor)) ?? [])
+            .sorted(by: isAnnotationOrderedBefore)
+        annotationSnapshots = annotations.map(\.snapshot)
+        annotationsVersion &+= 1
+    }
+
+    private func isAnnotationOrderedBefore(_ lhs: ReaderAnnotation, _ rhs: ReaderAnnotation) -> Bool {
+        let leftChapter  = srcOrder[lhs.src] ?? Int.max
+        let rightChapter = srcOrder[rhs.src] ?? Int.max
+        if leftChapter != rightChapter { return leftChapter < rightChapter }
+        if lhs.charStart != rhs.charStart { return lhs.charStart < rhs.charStart }
         return lhs.createdAt < rhs.createdAt
     }
 

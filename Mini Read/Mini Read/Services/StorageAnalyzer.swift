@@ -230,14 +230,18 @@ enum StorageAnalyzer {
     }
 
     /// 递归统计目录占用。路径不存在或不是目录时回退到单文件口径。
-    static func directorySize(_ url: URL) -> Int64 {
+    ///
+    /// - Parameter skippingHiddenFiles: 默认跳过隐藏文件，与分类统计的口径一致。
+    ///   但**清理相关**的统计必须传 `false`：删除是整目录删除，隐藏文件也会被带走，
+    ///   跳过它们会让"还剩多少"偏小，极端情况下小到 0——那会把清除入口永久锁死。
+    static func directorySize(_ url: URL, skippingHiddenFiles: Bool = true) -> Int64 {
         let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
         guard values?.isDirectory == true else { return allocatedSize(of: url) }
 
         guard let enumerator = FileManager.default.enumerator(
             at: url,
             includingPropertiesForKeys: [.isRegularFileKey, .totalFileAllocatedSizeKey],
-            options: [.skipsHiddenFiles]
+            options: skippingHiddenFiles ? [.skipsHiddenFiles] : []
         ) else { return allocatedSize(of: url) }
 
         var total: Int64 = 0

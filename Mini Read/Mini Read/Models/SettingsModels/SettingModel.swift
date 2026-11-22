@@ -106,10 +106,6 @@ final class AppSettings {
     var watermarkEnabled: Bool = false
     var watermarkText: String = ""
 
-    // 8. 隐私与安全
-    var hideReadingHistory: Bool = false
-    var enablePrivateShelf: Bool = false
-
     // 10. 系统设置
     var appLanguage: String = "system"
     var dateFormat: String = "system"
@@ -410,10 +406,6 @@ extension AppSettings {
         exportByChapter     = false
         watermarkEnabled    = false
         watermarkText       = ""
-
-        // 8. 隐私与安全
-        hideReadingHistory = false
-        enablePrivateShelf = false
 
         // 10. 系统设置
         appLanguage    = "system"

@@ -10,7 +10,10 @@
 //    封面 + 书名一眼定位，点进去才进入表单。
 //  - **草稿语义**。编辑页上的一切改动都留在 `@State` 里，只有「保存」才落库；
 //    返回时若有未保存改动，先问一句再丢。误触返回丢掉十分钟的整理是最难受的失败模式。
-//  - **自定义封面写进书自己的解压目录**（`<书>/VelliumCover.jpg`）。
+//  - **编辑页顶部是「身份卡」，不是一排控件**：封面 + 用衬线体排出的书名/作者，
+//    边输入边更新。用户真正在改的是"这本书在书架上长什么样"，而不是三个字符串；
+//    只给表单，他得自己想象改动后的结果，改完回到书架才发现书名被截断成两行。
+//  - **自定义封面写进书自己的解压目录**（`<书>/VelliumCover-xxxxxxxx.jpg`）。
 //    这样删书时封面随目录一起消失，不需要再维护一套"孤儿封面"回收逻辑；
 //    也不碰 EPUB 原件，导出/重导入仍然是原书。
 //  - **还原靠重新解析 EPUB**，而不是记一份"原始值"快照：快照要进 schema、
@@ -104,11 +107,21 @@ private struct BookMetadataPickerList: View {
                         BookMetadataRow(book: book)
                     }
                 }
-            } footer: {
-                Text("修改只影响本机书库里的显示信息，不会改动 EPUB 文件本身。")
+            } header: {
+                // 段头交代"这一屏有多少本"。书多的用户滚到一半会怀疑自己漏了哪本，
+                // 一个总数比无限长的列表更能给人边界感；搜索时则换成命中数。
+                Text(listHeader)
             }
         }
         .listStyle(.insetGrouped)
+        // 搜索键盘会盖住大半个列表；一滚动就收，别让用户先找"完成"。
+        .scrollDismissesKeyboard(.immediately)
+    }
+
+    private var listHeader: String {
+        let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !keyword.isEmpty else { return "全部书籍 · \(books.count) 本" }
+        return "搜索结果 · \(filteredBooks.count) 本"
     }
 
     /// 书名 / 作者 / 出版社三处都参与搜索：用户记得哪一条就搜哪一条。
@@ -134,11 +147,18 @@ private struct BookMetadataRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // 与书单选择面板同一枚 34×48 迷你封面（ImageIO 降采样 + 共享缓存），
-            // 几十上百行滚动时不会逐行解码原图。
-            MiniCover(book: book)
+            // 40×58 比默认的 34×48 多给一点识别面积：这一屏就是用来"认封面"的，
+            // 缩略图太小就退化成只能靠书名找书。仍走 `MiniCover` 的
+            // ImageIO 降采样 + 共享缓存，几十上百行滚动不会逐行解码原图。
+            MiniCover(book: book, size: CGSize(width: 40, height: 58))
+                .shadow(color: .black.opacity(0.16), radius: 2.5, x: 0, y: 1.5)
+                .overlay {
+                    // 浅色封面在白底上会"化掉"，一道细边把轮廓收回来。
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                }
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(book.bookTitle)
                     .font(.system(.subheadline, design: .serif, weight: .semibold))
                     .foregroundStyle(.primary)
@@ -146,26 +166,25 @@ private struct BookMetadataRow: View {
 
                 Text(subtitle)
                     .font(.caption)
-                    .foregroundStyle(hasSubtitle ? .secondary : .tertiary)
+                    .foregroundStyle(metaParts.isEmpty ? .tertiary : .secondary)
                     .lineLimit(1)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
         // 合成一个元素：VoiceOver 一次读出「书名，作者，出版社」，而不是三块碎片。
         .accessibilityElement(children: .combine)
         .accessibilityHint("打开这本书的信息编辑")
     }
 
-    private var subtitle: String {
-        let parts = [book.bookAuthor, book.bookPublisher]
+    /// 作者与出版社的可见片段。空串先剔掉：只填了出版社的书不该出现一个孤零零的" · "。
+    private var metaParts: [String] {
+        [book.bookAuthor, book.bookPublisher]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        return parts.isEmpty ? "未填写作者与出版社" : parts.joined(separator: " · ")
     }
 
-    private var hasSubtitle: Bool {
-        ![book.bookAuthor, book.bookPublisher]
-            .allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var subtitle: String {
+        metaParts.isEmpty ? "未填写作者与出版社" : metaParts.joined(separator: " · ")
     }
 }
 
@@ -173,10 +192,15 @@ private struct BookMetadataRow: View {
 
 struct BookMetadataEditorView: View {
 
+    /// 身份卡封面的开本（2:3）。宽高只在这里写一次：
+    /// 封面图与相机角标都以它为准。
+    private static let coverSize = CGSize(width: 84, height: 126)
+
     let book: bookItem
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
 
     // 草稿。初值取自模型，之后只由用户输入改变。
     @State private var title: String
@@ -187,6 +211,9 @@ struct BookMetadataEditorView: View {
     @State private var pickedCover: UIImage?
     /// 「还原为原始信息」取回的封面 URL；保存时写回模型并清掉自定义封面文件。
     @State private var restoredCoverURLs: [URL]?
+    /// 「还原」是否刚被用过。只驱动那一行"已取回，待保存"的反馈——
+    /// 还原是静默改值，不给回执的话用户会怀疑按钮没生效。
+    @State private var didRestoreFromEPUB = false
 
     @State private var isPickingCover = false
     @State private var isSaving = false
@@ -194,6 +221,17 @@ struct BookMetadataEditorView: View {
     @State private var isConfirmingRestore = false
     @State private var errorMessage = ""
     @State private var isShowingError = false
+
+    /// 键盘焦点。只服务两件事：给键盘挂一条「完成」，以及还原后主动收键盘。
+    ///
+    /// 三个字段都是 `axis: .vertical` 的多行输入（中文书名动辄二十字，单行输入框
+    /// 只会把它滚成一条缝），所以回车是换行、不是"下一项"——不做焦点串联，
+    /// 免得用户按回车期待跳转却多出一个空行。
+    @FocusState private var focusedField: Field?
+
+    private enum Field: Hashable {
+        case title, author, publisher
+    }
 
     init(book: bookItem) {
         self.book = book
@@ -208,6 +246,8 @@ struct BookMetadataEditorView: View {
             infoSection
             restoreSection
         }
+        // 表单里滚动时顺手收键盘，是 iOS 设置类界面的默认手感。
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("编辑信息")
         .navigationBarTitleDisplayMode(.inline)
         // 自绘返回：需要拦截"有未保存改动时直接退出"。
@@ -219,18 +259,16 @@ struct BookMetadataEditorView: View {
                     .disabled(isSaving)
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button("保存") { save() }
-                    .fontWeight(.semibold)
-                    .disabled(!canSave || isSaving)
+                saveButton
             }
         }
-        .interactiveDismissDisabled(hasChanges)
+        .interactiveDismissDisabled(hasChanges || isSaving)
         .fullScreenCover(isPresented: $isPickingCover) {
             PhotoPickerView { image in
                 guard let image else { return }
                 // 只覆盖草稿里的"新封面"。刻意不清掉 `restoredCoverURLs`：
-                // 用户选完又点「取消更换」时，应当退回还原后的那张，而不是书库里那张旧的。
-                pickedCover = image
+                // 用户选完又点「撤销更换」时，应当退回还原后的那张，而不是书库里那张旧的。
+                withAnimation(.snappy(duration: 0.2)) { pickedCover = image }
                 triggerHaptic(.light)
             }
             .ignoresSafeArea()
@@ -240,49 +278,118 @@ struct BookMetadataEditorView: View {
         } message: {
             Text(errorMessage)
         }
-        .confirmationDialog("放弃未保存的修改？", isPresented: $isConfirmingDiscard, titleVisibility: .visible) {
+        .alert("放弃未保存的修改？", isPresented: $isConfirmingDiscard) {
             Button("放弃修改", role: .destructive) { dismiss() }
             Button("继续编辑", role: .cancel) {}
         } message: {
             Text("返回后，刚才的改动不会保留。")
         }
-        .confirmationDialog("还原为 EPUB 原始信息？", isPresented: $isConfirmingRestore, titleVisibility: .visible) {
+        .alert("还原为 EPUB 原始信息？", isPresented: $isConfirmingRestore) {
             Button("还原") { restoreFromEPUB() }
             Button("取消", role: .cancel) {}
-        } message: {
-            Text("将重新读取这本书自带的书名、作者、出版社与封面。改动要点「保存」才会生效。")
         }
+    }
+
+    /// 保存中把文字换成转圈：点下去到落库之间有一段真实的磁盘 I/O，
+    /// 只让按钮变灰的话，用户会以为点空了而反复点。
+    private var saveButton: some View {
+        Button(action: save) {
+            Text("保存")
+                .fontWeight(.semibold)
+        }
+        .disabled(!canSave || isSaving)
+        .accessibilityLabel(isSaving ? "正在保存" : "保存")
     }
 
     // MARK: - 封面
 
+    /// 「身份卡」：左边是封面，右边是用书架同款衬线体排出的书名与作者。
+    ///
+    /// 没有把它做成居中的大封面：这一页的主任务是改书名，一张 300pt 高的封面
+    /// 会把三个输入框全部挤到首屏之外。横排既保住了视觉分量，又没占掉表单。
+    ///
+    /// 右侧只有文字，没有任何按钮：换封面的唯一入口是点封面本身。
+    /// 放一枚「更换封面」按钮，读起来就像"封面是附件"，而这里要传达的是
+    /// "这本书长这样，点它可以换"；文字也才有机会和封面平视对齐。
     private var coverSection: some View {
         Section {
-            VStack(spacing: 14) {
-                coverPreview
+            HStack(alignment: .center, spacing: 16) {
+                coverButton
 
-                HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(previewTitle)
+                        .font(.system(.headline, design: .serif, weight: .semibold))
+                        .foregroundStyle(trimmedTitle.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+                        .lineLimit(3)
+                        // 只是所见即所得的预览，同样的内容下面三个输入框里都有；
+                        // 让 VoiceOver 再念一遍只会把表单拖长一倍。
+                        .accessibilityHidden(true)
+
+                    Text(previewByline)
+                        .font(.footnote)
+                        .foregroundStyle(metaParts.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
+                        .lineLimit(2)
+                        .accessibilityHidden(true)
+                }
+                // 书名短时文字块仍占满整列，靠 `HStack` 的居中对齐与封面成为一张卡；
+                // 书名长时先长文字、封面保持 2:3 不动。
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.vertical, 6)
+        } header: {
+            Text("封面")
+        }
+    }
+
+    /// 封面本身就是更换入口。相机角标是唯一的视觉提示，
+    /// 「轻点可以换」这件事由无障碍的 label / hint 交代。
+    ///
+    /// 「撤销更换」收进长按菜单：它是一次性的补救动作，常驻在卡片上会跟
+    /// "点封面更换"抢注意力，也违背"右侧只留文字"的取舍。
+    /// 只在真的选过新图时才挂菜单——空菜单长按会闪一下却什么都不出来。
+    @ViewBuilder
+    private var coverButton: some View {
+        if pickedCover != nil {
+            baseCoverButton
+                .contextMenu {
                     Button {
-                        isPickingCover = true
+                        withAnimation(.snappy(duration: 0.2)) { pickedCover = nil }
+                        triggerHaptic(.light)
                     } label: {
-                        Label("更换封面", systemImage: "photo")
-                    }
-
-                    if pickedCover != nil {
-                        Button {
-                            pickedCover = nil
-                        } label: {
-                            Label("取消更换", systemImage: "arrow.uturn.backward")
-                        }
+                        Label("撤销更换", systemImage: "arrow.uturn.backward")
                     }
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(isSaving)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
+        } else {
+            baseCoverButton
         }
+    }
+
+    private var baseCoverButton: some View {
+        Button {
+            guard !isSaving else { return }
+            triggerHaptic(.light)
+            isPickingCover = true
+        } label: {
+            coverArtwork
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(.thickMaterial))
+                        .overlay {
+                            Circle().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                        }
+                        .offset(x: 5, y: 5)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(isSaving)
+        .accessibilityLabel("封面预览")
+        .accessibilityValue(coverPreviewDescription)
+        .accessibilityHint("轻点更换封面")
     }
 
     /// 草稿封面：新选的图 > 还原取回的原始封面 > 库里现有的那张。
@@ -290,29 +397,43 @@ struct BookMetadataEditorView: View {
     /// 现有封面走 `CoverThumbnailView`（后台降采样），不在这里 `UIImage(contentsOfFile:)`：
     /// 有些书的封面是整页大图，同步解码会在进入编辑页的第一帧上顿一下。
     @ViewBuilder
-    private var coverPreview: some View {
-        let side = CGSize(width: 112, height: 168)
+    private var coverArtwork: some View {
+        let side = Self.coverSize
 
         Group {
             if let pickedCover {
                 Image(uiImage: pickedCover)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: side.width, height: side.height)
-                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
             } else {
                 CoverThumbnailView(
                     url: previewCoverURL,
                     size: side,
-                    cornerRadius: 4
+                    cornerRadius: 5
                 )
             }
         }
+        .frame(width: side.width, height: side.height)
+        // 没有封面时给一块极淡的底色：`CoverThumbnailView` 的空态只有一枚图标，
+        // 落在表单行里会像"没画完"，加个底才读得出这是一张待填的封面位。
+        .background {
+            if pickedCover == nil, previewCoverURL == nil {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .overlay {
+            // 深色模式里封面和行背景可能同色，一道细边把轮廓交代清楚。
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+        }
         // 这里不用 `premiumHardcoverStyle()`：它的 15pt 悬浮影在分组列表行里
         // 会被行边界裁掉一半，反而显脏。表单里给一道克制的接触影就够。
-        .shadow(color: .black.opacity(0.18), radius: 5, x: 0, y: 2)
-        .accessibilityLabel("封面预览")
-        .accessibilityValue(coverPreviewDescription)
+        .shadow(color: .black.opacity(colorScheme == .dark ? 0.5 : 0.18), radius: 6, x: 0, y: 3)
+        // 刻意**不**给这张图加 `accessibilityHidden`：它是按钮的 label，
+        // 把 label 整棵子树隐藏掉，按钮本身也会从无障碍树里消失。
+        // 图片没有自己的标签，本来就不会单独被念出来；语义由外层按钮给。
     }
 
     /// 预览用的封面地址。还原后取 EPUB 里的那张（可能为空，此时显示占位图）。
@@ -331,18 +452,18 @@ struct BookMetadataEditorView: View {
 
     private var infoSection: some View {
         Section {
-            textField("书名", text: $title, prompt: "必填")
-            textField("作者", text: $author, prompt: "未知作者")
-            textField("出版社", text: $publisher, prompt: "未知出版社")
+            fieldRow(
+                "书名",
+                icon: "textformat",
+                text: $title,
+                prompt: "必填",
+                field: .title,
+                errorText: trimmedTitle.isEmpty ? "书名不能为空" : nil
+            )
+            fieldRow("作者", icon: "person", text: $author, prompt: "未知作者", field: .author)
+            fieldRow("出版社", icon: "building.columns", text: $publisher, prompt: "未知出版社", field: .publisher)
         } header: {
             Text("书籍信息")
-        } footer: {
-            if trimmedTitle.isEmpty {
-                Text("书名不能为空。")
-                    .foregroundStyle(.red)
-            } else {
-                Text("书库、扉页与目录面板都会使用这里的书名与作者。")
-            }
         }
     }
 
@@ -350,23 +471,48 @@ struct BookMetadataEditorView: View {
     ///
     /// 不用 `LabeledContent` 的左右排法：中文书名动辄二十字，
     /// 右对齐的单行输入框只会把它滚成一条缝，用户看不见自己在改什么。
-    private func textField(
+    ///
+    /// 校验信息贴在字段正下方而不是段尾：段尾那行离输入框有半个屏幕，
+    /// 用户清空书名后眼睛还在输入框上，看不到"不能为空"。
+    private func fieldRow(
         _ label: String,
+        icon: String,
         text: Binding<String>,
-        prompt: String
+        prompt: String,
+        field: Field,
+        errorText: String? = nil
     ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .imageScale(.small)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 15, alignment: .leading)
+
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            // 标签只是给眼睛看的：输入框自己带着 accessibilityLabel，
+            // 两边都念一遍等于每次进字段前多听三个字。
+            .accessibilityHidden(true)
 
             TextField(prompt, text: text, axis: .vertical)
                 .lineLimit(1...3)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .focused($focusedField, equals: field)
                 .accessibilityLabel(label)
+
+            if let errorText {
+                Label(errorText, systemImage: "exclamationmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .transition(.opacity)
+            }
         }
         .padding(.vertical, 2)
+        .animation(.easeInOut(duration: 0.18), value: errorText == nil)
     }
 
     // MARK: - 还原
@@ -379,8 +525,18 @@ struct BookMetadataEditorView: View {
                 Label("还原为 EPUB 原始信息", systemImage: "arrow.uturn.backward")
             }
             .disabled(isSaving)
-        } footer: {
-            Text("重新读取这本书自带的信息，用来撤销改坏的书名或封面。仅修改书库记录，不改动 EPUB 文件。")
+
+            if didRestoreFromEPUB {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+
+                    Text("已取回原始信息，保存后生效")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.footnote)
+                .transition(.opacity)
+            }
         }
     }
 
@@ -396,6 +552,20 @@ struct BookMetadataEditorView: View {
 
     private var trimmedPublisher: String {
         publisher.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 预览用的书名：空书名不该让卡片塌成一片空白，给一句占位更像"还没起名"。
+    private var previewTitle: String {
+        trimmedTitle.isEmpty ? "未命名书籍" : trimmedTitle
+    }
+
+    /// 预览用的副标题：把作者与出版社并成一行，正是书架与书单里的排法。
+    private var metaParts: [String] {
+        [trimmedAuthor, trimmedPublisher].filter { !$0.isEmpty }
+    }
+
+    private var previewByline: String {
+        metaParts.isEmpty ? "未填写作者与出版社" : metaParts.joined(separator: " · ")
     }
 
     /// 是否真的改过东西——决定「保存」能否点、返回要不要拦。
@@ -435,6 +605,14 @@ struct BookMetadataEditorView: View {
     private func performSave() async {
         defer { isSaving = false }
 
+        // 失败时要还原的模型现值。`modelContext.save()` 抛错时，内存里的 `bookItem`
+        // 已经被改过了，而下一次 autosave 会把这份"没保存成功"的草稿静默写进库：
+        // 用户看到的是「保存失败」，重启后书名却变了。所以失败路径必须自己回滚。
+        let originalTitle = book.bookTitle
+        let originalAuthor = book.bookAuthor
+        let originalPublisher = book.bookPublisher
+        let originalCovers = book.coverImageURLs
+
         // 顺序：写新封面文件 → 改模型 → 落库 → 清旧文件。
         //
         // 旧封面**不能在落库前删**：万一 `save()` 抛错（磁盘满、库损坏），
@@ -458,6 +636,16 @@ struct BookMetadataEditorView: View {
 
             try modelContext.save()
         } catch {
+            book.bookTitle = originalTitle
+            book.bookAuthor = originalAuthor
+            book.bookPublisher = originalPublisher
+            book.coverImageURLs = originalCovers
+
+            // 刚落盘的那张新封面已经没人引用了，顺手清掉；清不掉也不影响报错。
+            if let newCoverURL {
+                try? FileManager.default.removeItem(at: newCoverURL)
+            }
+
             triggerNotificationHaptic(.error)
             errorMessage = "无法保存这本书的信息：\(error.localizedDescription)"
             isShowingError = true
@@ -489,11 +677,18 @@ struct BookMetadataEditorView: View {
             return
         }
 
-        title = original.title
-        author = original.author
-        publisher = original.publisher
-        pickedCover = nil
-        restoredCoverURLs = original.coverImageURLs
+        // 键盘此刻多半还举着，遮住的就是刚被改掉的那几行。先收起来再改值。
+        focusedField = nil
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            title = original.title
+            author = original.author
+            publisher = original.publisher
+            pickedCover = nil
+            restoredCoverURLs = original.coverImageURLs
+            didRestoreFromEPUB = true
+        }
+
         triggerHaptic(.light)
     }
 }

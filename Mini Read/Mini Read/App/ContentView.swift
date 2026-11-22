@@ -17,7 +17,7 @@ struct ContentView: View {
                 AvatarImageStore.shared.load()   // App 启动即加载，所有 View 首帧就有头像
             }
     }
-    
+
     // 初始化默认设置（并确保 AppSettings 只有一条）
     private func initializeDefaultSettings() {
         // 走统一入口：既保证存在、又会在启动时收敛历史遗留的重复记录

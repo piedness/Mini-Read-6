@@ -6,6 +6,8 @@
 //  把 `ReadingStatsEngine` 算好的值画出来，不在这里做二次计算——
 //  口径一旦分叉，「日均」和「合计」就会开始互相矛盾。
 //
+//  版式统一走 `ReadingStatsStyle` 里的零件；这里只决定「放几个、怎么排」。
+//
 
 import Foundation
 import SwiftUI
@@ -19,24 +21,18 @@ struct ReadingStatsTrendCard: View {
     let subtitle: String
     let accent: Color
     let reduceMotion: Bool
+    /// iPad 宽版把趋势图铺满整行，170pt 会显得太扁。
+    var chartHeight: CGFloat = 170
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        StatsCard(title: "阅读时长", subtitle: subtitle) {
+        StatsCard(title: "阅读趋势", subtitle: subtitle) {
             metrics
 
             if trend.totalSeconds < 60 {
                 // 不到一分钟时画出来只会是一条空轴，不如直接说清楚。
-                VStack(spacing: 6) {
-                    Image(systemName: "chart.bar")
-                        .font(.system(size: 18, weight: .light))
-                        .foregroundStyle(.tertiary)
-                    Text("这段时间的阅读还不足一分钟")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, minHeight: 120)
+                emptyChart
             } else {
                 chart
             }
@@ -48,14 +44,20 @@ struct ReadingStatsTrendCard: View {
             if typeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 10) {
                     StatsMetric(label: "合计", value: StatsFormat.duration(trend.totalSeconds))
-                    StatsMetric(label: "\(trend.bucketNoun)均", value: StatsFormat.duration(trend.averageSeconds))
-                    StatsMetric(label: "较上期", value: changeText)
+                    StatsMetric(
+                        label: "\(trend.bucketNoun)均",
+                        value: StatsFormat.duration(trend.averageSeconds)
+                    )
+                    StatsMetric(label: "较上期", value: changeText, tint: changeTint)
                 }
             } else {
                 HStack(alignment: .top, spacing: 12) {
                     StatsMetric(label: "合计", value: StatsFormat.duration(trend.totalSeconds))
-                    StatsMetric(label: "\(trend.bucketNoun)均", value: StatsFormat.duration(trend.averageSeconds))
-                    StatsMetric(label: "较上期", value: changeText)
+                    StatsMetric(
+                        label: "\(trend.bucketNoun)均",
+                        value: StatsFormat.duration(trend.averageSeconds)
+                    )
+                    StatsMetric(label: "较上期", value: changeText, tint: changeTint)
                 }
             }
         }
@@ -67,11 +69,32 @@ struct ReadingStatsTrendCard: View {
         return StatsFormat.change(ratio)
     }
 
+    private var changeTint: Color {
+        guard let ratio = trend.changeRatio, ratio > 0 else {
+            return StatsPalette.secondaryText
+        }
+        return StatsPalette.readable(accent)
+    }
+
+    private var emptyChart: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "chart.bar")
+                .font(.title3)
+                .foregroundStyle(StatsPalette.tertiaryText)
+                .accessibilityHidden(true)
+
+            Text("这段时间的阅读还不足一分钟")
+                .font(.footnote)
+                .foregroundStyle(StatsPalette.secondaryText)
+        }
+        .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
+    }
+
     private var chart: some View {
         let peak = max(trend.points.map(\.minutes).max() ?? 0, 1)
         let domain = 0...max(Int(Double(peak) * 1.18), 1)
 
-        return Chart {
+        let base = Chart {
             ForEach(trend.points) { point in
                 BarMark(
                     x: .value("时间", point.start, unit: trend.bucketComponent),
@@ -79,7 +102,7 @@ struct ReadingStatsTrendCard: View {
                 )
                 .foregroundStyle(
                     LinearGradient(
-                        colors: [accent.opacity(0.95), accent.opacity(0.45)],
+                        colors: [accent, accent.opacity(0.62)],
                         startPoint: .top,
                         endPoint: .bottom
                     )
@@ -88,48 +111,74 @@ struct ReadingStatsTrendCard: View {
             }
 
             if trend.averageSeconds > 0 {
-                RuleMark(y: .value("平均", trend.averageSeconds / 60))
-                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                    .foregroundStyle(Color.secondary.opacity(0.45))
+                RuleMark(y: .value("平均", Double(trend.averageSeconds) / 60))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    .foregroundStyle(StatsPalette.tertiaryText.opacity(0.6))
             }
         }
         .chartYScale(domain: domain)
         .chartLegend(.hidden)
-        .chartYAxis {
-            AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
-                AxisGridLine()
-                    .foregroundStyle(Color.primary.opacity(0.05))
-                AxisValueLabel {
-                    if let minutes = value.as(Int.self) {
-                        Text(StatsFormat.axisMinutes(minutes))
-                            .font(.system(size: 9))
-                            .monospacedDigit()
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-            }
-        }
-        .chartXAxis {
-            AxisMarks(values: tickDates) { value in
-                AxisTick()
-                    .foregroundStyle(Color.primary.opacity(0.10))
-                AxisValueLabel {
-                    if let date = value.as(Date.self) {
-                        Text(labelByStart[date] ?? "")
-                            .font(.system(size: 9))
-                            .monospacedDigit()
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-            }
-        }
-        .frame(height: 168)
+        .frame(height: chartHeight)
         .animation(
             reduceMotion ? nil : .easeOut(duration: 0.35),
             value: trend.points.map(\.seconds)
         )
         .accessibilityChartDescriptor(TrendChartDescriptor(trend: trend))
         .accessibilityLabel("阅读时长趋势")
+
+        return Group {
+            if typeSize.isAccessibilitySize {
+                // 轴标签跟着字号长到 28pt 后，4 个日期会挤成「10/24/11 1/9」。
+                // 大字号下把轴交给文字摘要，图只保留形状；VoiceOver 另有
+                // `TrendChartDescriptor` 逐点描述。
+                VStack(alignment: .leading, spacing: 8) {
+                    base
+                        .chartXAxis(.hidden)
+                        .chartYAxis(.hidden)
+
+                    peakNote
+                }
+            } else {
+                base
+                    .chartYAxis {
+                        // 只要两个刻度、不要网格线：这张图回答的是「形状」，
+                        // 具体数值由上方三个指标承担。
+                        AxisMarks(position: .leading, values: .automatic(desiredCount: 2)) { value in
+                            AxisValueLabel {
+                                if let minutes = value.as(Int.self) {
+                                    Text(StatsFormat.axisMinutes(minutes))
+                                        .font(.caption2)
+                                        .monospacedDigit()
+                                        .foregroundStyle(StatsPalette.tertiaryText)
+                                }
+                            }
+                        }
+                    }
+                    .chartXAxis {
+                        AxisMarks(values: tickDates) { value in
+                            AxisValueLabel {
+                                if let date = value.as(Date.self) {
+                                    Text(labelByStart[date] ?? "")
+                                        .font(.caption2)
+                                        .monospacedDigit()
+                                        .foregroundStyle(StatsPalette.tertiaryText)
+                                }
+                            }
+                        }
+                    }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var peakNote: some View {
+        if let best = trend.best, best.seconds > 0 {
+            Text("最多的一天是 \(best.accessibleLabel)，\(StatsFormat.duration(best.seconds))")
+                .font(.footnote)
+                .monospacedDigit()
+                .foregroundStyle(StatsPalette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     /// 30 根柱子放不下 30 个标签，均匀取 4–5 个刻度。
@@ -212,6 +261,9 @@ struct ReadingStatsRhythmCard: View {
     let accent: Color
 
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var accentText: Color { StatsPalette.readable(accent) }
 
     var body: some View {
         StatsCard(title: "阅读时段", subtitle: subtitle) {
@@ -232,20 +284,20 @@ struct ReadingStatsRhythmCard: View {
         // 30 分钟作为满格参照：几十秒的记录不该把整张热力图点亮。
         let peak = max(rhythm.grid.flatMap { $0 }.max() ?? 0, 30 * 60)
 
-        return VStack(spacing: 3) {
+        return VStack(spacing: 4) {
             ForEach(0..<7, id: \.self) { weekday in
                 HStack(spacing: 6) {
-                    Text(shortWeekday(weekday))
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 14, alignment: .leading)
+                    Text(StatsFormat.shortWeekday(weekday))
+                        .font(.caption2)
+                        .foregroundStyle(StatsPalette.tertiaryText)
+                        .frame(width: 16, alignment: .leading)
 
                     HStack(spacing: 2) {
                         ForEach(0..<24, id: \.self) { hour in
-                            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
                                 .fill(cellColor(rhythm.grid[weekday][hour], peak: peak))
                                 .frame(maxWidth: .infinity)
-                                .frame(height: 11)
+                                .frame(height: 12)
                         }
                     }
                 }
@@ -256,7 +308,7 @@ struct ReadingStatsRhythmCard: View {
 
             HStack(spacing: 6) {
                 Color.clear
-                    .frame(width: 14, height: 1)
+                    .frame(width: 16, height: 1)
 
                 HStack(spacing: 0) {
                     Text("0")
@@ -269,11 +321,12 @@ struct ReadingStatsRhythmCard: View {
                     Spacer(minLength: 0)
                     Text("24")
                 }
-                .font(.system(size: 9))
+                .font(.caption2)
                 .monospacedDigit()
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(StatsPalette.tertiaryText)
             }
-            .padding(.top, 1)
+            .padding(.top, 2)
+            .accessibilityHidden(true)
         }
     }
 
@@ -281,7 +334,7 @@ struct ReadingStatsRhythmCard: View {
         HStack(spacing: 4) {
             Text("少")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(StatsPalette.tertiaryText)
 
             ForEach(0..<5, id: \.self) { level in
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
@@ -291,7 +344,7 @@ struct ReadingStatsRhythmCard: View {
 
             Text("多")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(StatsPalette.tertiaryText)
 
             Spacer(minLength: 0)
         }
@@ -301,23 +354,25 @@ struct ReadingStatsRhythmCard: View {
     private var slotList: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("阅读最集中的时段")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(StatsPalette.secondaryText)
 
             if rhythm.peakSlots.isEmpty {
                 Text("本期还没有阅读记录")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.footnote)
+                    .foregroundStyle(StatsPalette.tertiaryText)
             } else {
                 ForEach(rhythm.peakSlots) { slot in
                     HStack(spacing: 8) {
                         Text("\(StatsFormat.weekday(slot.weekday)) \(StatsFormat.hour(slot.hour))")
-                            .font(.caption)
+                            .font(.footnote)
+
                         Spacer(minLength: 8)
+
                         Text(StatsFormat.duration(slot.seconds))
-                            .font(.caption)
+                            .font(.footnote)
                             .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(StatsPalette.secondaryText)
                     }
                     .accessibilityElement(children: .combine)
                 }
@@ -331,41 +386,38 @@ struct ReadingStatsRhythmCard: View {
                 Text("\(profile.label) · \(StatsFormat.percent(profile.share))")
                     .font(.caption.weight(.semibold))
                     .monospacedDigit()
-                    .foregroundStyle(accent)
+                    .foregroundStyle(accentText)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 4)
-                    .background(Capsule(style: .continuous).fill(accent.opacity(0.12)))
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(accent.opacity(colorScheme == .dark ? 0.22 : 0.12))
+                    )
             }
 
             if let peak = rhythm.peak {
                 Text("最常在 \(StatsFormat.weekday(peak.weekday)) \(StatsFormat.hour(peak.hour))，累计 \(StatsFormat.duration(peak.seconds))")
-                    .font(.caption)
+                    .font(.footnote)
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(StatsPalette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("本期还没有阅读记录")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.footnote)
+                    .foregroundStyle(StatsPalette.tertiaryText)
             }
         }
-    }
-
-    private func shortWeekday(_ index: Int) -> String {
-        let names = ["一", "二", "三", "四", "五", "六", "日"]
-        guard index >= 0, index < names.count else { return "" }
-        return names[index]
     }
 
     private func cellColor(_ seconds: Int, peak: Int) -> Color {
         guard seconds > 0 else { return Color.primary.opacity(0.05) }
         let ratio = Double(seconds) / Double(peak)
         // 开方压缩：低值时段也要看得见，否则热力图只剩几个孤零零的深色格子。
-        return accent.opacity(0.20 + 0.75 * pow(ratio, 0.55))
+        return accent.opacity(0.20 + 0.72 * pow(ratio, 0.55))
     }
 
     private func legendOpacity(_ level: Int) -> Double {
-        [0.08, 0.25, 0.45, 0.65, 0.9][min(max(level, 0), 4)]
+        [0.10, 0.26, 0.44, 0.62, 0.86][min(max(level, 0), 4)]
     }
 
     private func rowSummary(_ weekday: Int) -> String {
@@ -391,8 +443,8 @@ struct ReadingStatsSessionCard: View {
         StatsCard(title: "单次阅读", subtitle: subtitle) {
             if profile.count == 0 {
                 Text("本期还没有完整的阅读记录")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.footnote)
+                    .foregroundStyle(StatsPalette.tertiaryText)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(profile.buckets) { bucket in
@@ -400,9 +452,9 @@ struct ReadingStatsSessionCard: View {
                     }
 
                     Text("本期共 \(profile.count) 次阅读")
-                        .font(.caption2)
+                        .font(.caption)
                         .monospacedDigit()
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(StatsPalette.tertiaryText)
                         .padding(.top, 2)
                 }
             }
@@ -423,31 +475,34 @@ struct ReadingStatsSessionCard: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
                     Text(bucket.label)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.footnote)
+                        .foregroundStyle(StatsPalette.secondaryText)
+
                     Spacer(minLength: 8)
+
                     Text("\(bucket.count) 次")
-                        .font(.caption)
+                        .font(.footnote)
                         .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(StatsPalette.secondaryText)
                 }
-                StatsBar(fraction: fraction, accent: accent, height: 8)
+
+                StatsBar(fraction: fraction, accent: accent, height: 7)
             }
             .accessibilityElement(children: .combine)
         } else {
             HStack(spacing: 10) {
                 Text(bucket.label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 74, alignment: .leading)
+                    .font(.footnote)
+                    .foregroundStyle(StatsPalette.secondaryText)
+                    .frame(width: 78, alignment: .leading)
 
-                StatsBar(fraction: fraction, accent: accent, height: 8)
+                StatsBar(fraction: fraction, accent: accent, height: 7)
 
                 Text("\(bucket.count)")
-                    .font(.caption)
+                    .font(.footnote)
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 22, alignment: .trailing)
+                    .foregroundStyle(StatsPalette.secondaryText)
+                    .frame(width: 24, alignment: .trailing)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(bucket.label)，\(bucket.count) 次")
@@ -468,37 +523,47 @@ struct ReadingStatsBooksCard: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     private var visibleBooks: [ReadingStatsBookSlice] {
-        Array(books.prefix(6))
+        Array(books.prefix(5))
     }
 
     var body: some View {
-        StatsCard(title: "书籍", subtitle: "\(subtitle) · \(books.count) 本") {
+        StatsCard(title: "本期书籍", subtitle: "\(subtitle) · \(books.count) 本") {
             if books.isEmpty {
                 Text("这段时间还没有读过的书")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.footnote)
+                    .foregroundStyle(StatsPalette.tertiaryText)
             } else {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 14) {
                     ForEach(visibleBooks) { book in
+                        if book.id != visibleBooks.first?.id {
+                            separator
+                        }
                         row(book)
                     }
 
                     if books.count > visibleBooks.count {
                         Text("仅显示本期阅读时长最长的 \(visibleBooks.count) 本")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .font(.caption)
+                            .foregroundStyle(StatsPalette.tertiaryText)
                     }
 
-                    Divider()
-                        .overlay(Color.primary.opacity(0.06))
+                    separator
 
                     Text(footerText)
-                        .font(.caption2)
+                        .font(.caption)
                         .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(StatsPalette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
+    }
+
+    private var separator: some View {
+        Rectangle()
+            .fill(StatsPalette.separator)
+            .frame(height: 0.5)
+            .accessibilityHidden(true)
     }
 
     /// 读完率的分母是「开始过的书」，不是「书库里的书」——
@@ -510,82 +575,102 @@ struct ReadingStatsBooksCard: View {
         return "书库 \(overview.libraryCount) 本 · 读完率 \(StatsFormat.percent(rate))（\(overview.finishedBooks) / \(overview.startedBooks) 本）"
     }
 
+    @ViewBuilder
     private func row(_ book: ReadingStatsBookSlice) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            CoverThumbnailView(
-                url: book.coverURL,
-                size: CGSize(width: 38, height: 56),
-                cornerRadius: 5
-            )
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 12) {
+                    cover(book)
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(book.title)
-                        .font(.subheadline.weight(.medium))
-                        .lineLimit(2)
-
-                    Spacer(minLength: 4)
-
-                    if let remaining = book.remainingSeconds {
-                        Text(StatsFormat.remaining(remaining))
-                            .font(.caption2)
-                            .monospacedDigit()
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 4) {
+                        title(book)
+                        author(book)
                     }
                 }
 
-                Text(book.author.isEmpty ? "未知作者" : book.author)
+                progressLine(book)
+
+                Text("本期 \(StatsFormat.duration(book.seconds)) · \(book.sessionCount) 次")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .monospacedDigit()
+                    .foregroundStyle(StatsPalette.secondaryText)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityLabel(book))
+        } else {
+            HStack(alignment: .top, spacing: 12) {
+                cover(book)
 
-                if typeSize.isAccessibilitySize {
-                    VStack(alignment: .leading, spacing: 5) {
-                        progressLine(book)
-                        Text("本期 \(StatsFormat.duration(book.seconds)) · \(book.sessionCount) 次")
-                            .font(.caption2)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    HStack(spacing: 8) {
-                        progressLine(book)
+                VStack(alignment: .leading, spacing: 4) {
+                    title(book)
+                    author(book)
 
-                        Spacer(minLength: 8)
+                    HStack(spacing: 12) {
+                        progressLine(book)
 
                         Text("本期 \(StatsFormat.duration(book.seconds))")
-                            .font(.caption2)
+                            .font(.caption)
                             .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(StatsPalette.secondaryText)
+                            .lineLimit(1)
                     }
+                    .padding(.top, 1)
                 }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityLabel(book))
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel(book))
+    }
+
+    private func cover(_ book: ReadingStatsBookSlice) -> some View {
+        StatsCover(
+            url: book.coverURL,
+            size: CGSize(width: 36, height: 52),
+            cornerRadius: 5
+        )
+    }
+
+    private func title(_ book: ReadingStatsBookSlice) -> some View {
+        Text(book.title)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.primary)
+            .lineLimit(2)
+            .layoutPriority(1)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func author(_ book: ReadingStatsBookSlice) -> some View {
+        Text(book.author.isEmpty ? "未知作者" : book.author)
+            .font(.caption)
+            .foregroundStyle(StatsPalette.secondaryText)
+            .lineLimit(1)
     }
 
     @ViewBuilder
     private func progressLine(_ book: ReadingStatsBookSlice) -> some View {
         if let progress = book.progress {
             HStack(spacing: 6) {
+                // 进度条吃掉剩余宽度：iPad 宽列里固定 110pt 会显得很短，
+                // 也会让「本期时长」孤零零地飘在右边。
                 StatsBar(fraction: progress, accent: accent, height: 3)
-                    .frame(maxWidth: 120)
+                    .frame(maxWidth: .infinity)
+
                 Text(StatsFormat.percent(progress))
-                    .font(.caption2)
+                    .font(.caption)
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(StatsPalette.secondaryText)
+
                 if book.isFinished {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(accent)
+                        .font(.caption2)
+                        .foregroundStyle(StatsPalette.readable(accent))
+                        .accessibilityHidden(true)
                 }
             }
         } else {
             Text("进度未统计")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(.caption)
+                .foregroundStyle(StatsPalette.tertiaryText)
         }
     }
 
@@ -611,21 +696,23 @@ struct ReadingStatsAuthorsCard: View {
     let subtitle: String
     let accent: Color
 
-    @Environment(\.dynamicTypeSize) private var typeSize
+    private var visibleAuthors: [ReadingStatsAuthorSlice] {
+        Array(authors.prefix(3))
+    }
 
     private var totalSeconds: Int {
-        max(authors.reduce(0) { $0 + $1.seconds }, 1)
+        max(visibleAuthors.reduce(0) { $0 + $1.seconds }, 1)
     }
 
     var body: some View {
-        StatsCard(title: "作者", subtitle: subtitle) {
-            if authors.isEmpty {
+        StatsCard(title: "常读作者", subtitle: subtitle) {
+            if visibleAuthors.isEmpty {
                 Text("本期还没有可以归类的作者")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.footnote)
+                    .foregroundStyle(StatsPalette.tertiaryText)
             } else {
                 VStack(alignment: .leading, spacing: 12) {
-                    ForEach(authors) { author in
+                    ForEach(visibleAuthors) { author in
                         row(author)
                     }
                 }
@@ -633,44 +720,32 @@ struct ReadingStatsAuthorsCard: View {
         }
     }
 
-    @ViewBuilder
     private func row(_ author: ReadingStatsAuthorSlice) -> some View {
         let fraction = Double(author.seconds) / Double(totalSeconds)
 
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 8) {
-                    Text(author.name)
-                        .font(.subheadline)
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    Text(StatsFormat.duration(author.seconds))
-                        .font(.caption2)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
-                StatsBar(fraction: fraction, accent: accent, height: 5)
-            }
-            .accessibilityElement(children: .combine)
-        } else {
-            HStack(spacing: 10) {
+        return VStack(alignment: .leading, spacing: 6) {
+            // 名字单独占一行：固定列宽会把「[日]东野圭吾,张舟(译)」截成
+            // 「[日]东野圭吾,…」，而作者名恰恰是这张卡里唯一需要看清的字。
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(author.name)
                     .font(.subheadline)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                    .frame(width: 110, alignment: .leading)
+                    .minimumScaleFactor(0.8)
 
-                StatsBar(fraction: fraction, accent: accent, height: 5)
+                Spacer(minLength: 8)
 
                 Text(StatsFormat.duration(author.seconds))
-                    .font(.caption2)
+                    .font(.caption)
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 64, alignment: .trailing)
+                    .foregroundStyle(StatsPalette.secondaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(author.name)，\(StatsFormat.duration(author.seconds))，\(author.bookCount) 本")
+
+            StatsBar(fraction: fraction, accent: accent, height: 5)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(author.name)，\(StatsFormat.duration(author.seconds))，\(author.bookCount) 本")
     }
 }
 
@@ -684,33 +759,42 @@ struct ReadingStatsInsightsCard: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    private var accentText: Color { StatsPalette.readable(accent) }
+
     private var columns: [GridItem] {
         let count = typeSize.isAccessibilitySize ? 1 : 2
-        return Array(repeating: GridItem(.flexible(), spacing: 14, alignment: .topLeading), count: count)
+        return Array(
+            repeating: GridItem(.flexible(), spacing: 16, alignment: .topLeading),
+            count: count
+        )
     }
 
     var body: some View {
-        StatsCard(title: "洞察", subtitle: "本期") {
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+        StatsCard(title: "阅读洞察", subtitle: "本期") {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 18) {
                 tile(
+                    icon: "book.pages",
                     title: "章节节奏",
                     value: insights.chapterPace.map { String(format: "%.1f 章/时", $0) } ?? "—",
                     detail: "本期读完 \(insights.chaptersInRange) 章"
                 )
 
                 tile(
+                    icon: "moon.stars",
                     title: "深夜阅读",
                     value: StatsFormat.percent(nightShare),
                     detail: "23:00–05:00 的占比"
                 )
 
                 tile(
+                    icon: "bookmark",
                     title: "书签",
                     value: "\(insights.bookmarksInRange) 个",
                     detail: bookmarkDetail
                 )
 
                 tile(
+                    icon: "calendar",
                     title: "有阅读的天数",
                     value: StatsFormat.percent(insights.activeDayShare),
                     detail: "\(insights.activeDaysInRange) / \(insights.elapsedDays) 天"
@@ -722,27 +806,40 @@ struct ReadingStatsInsightsCard: View {
     /// 密度低于 0.1 时写成「每小时 0.0 个」等于没写，直接给总数。
     private var bookmarkDetail: String {
         if let density = insights.bookmarkDensity, density >= 0.1 {
-            return "每小时 \(String(format: "%.1f", density)) 个 · 共 \(insights.bookmarksTotal) 个"
+            let pace = "每小时 \(String(format: "%.1f", density)) 个"
+            // 数值本身已经写了「7 个」，这里再写一遍「共 7 个」是重复。
+            return insights.bookmarksInRange == insights.bookmarksTotal
+                ? pace
+                : "\(pace) · 共 \(insights.bookmarksTotal) 个"
         }
         return "共 \(insights.bookmarksTotal) 个书签"
     }
 
-    private func tile(title: String, value: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+    private func tile(icon: String, title: String, value: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.caption)
+                    .foregroundStyle(accentText)
+                    .accessibilityHidden(true)
+
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(StatsPalette.secondaryText)
+            }
 
             Text(value)
-                .font(.system(size: 20, weight: .regular, design: .serif))
+                .font(.title3)
+                .fontDesign(.rounded)
+                .fontWeight(.semibold)
                 .monospacedDigit()
                 .foregroundStyle(.primary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .minimumScaleFactor(0.7)
 
             Text(detail)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(.caption)
+                .foregroundStyle(StatsPalette.secondaryText)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
         }

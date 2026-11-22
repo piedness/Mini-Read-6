@@ -94,6 +94,20 @@ final class PaginationCache {
 
     private let diskURL: URL = PaginationCache.diskDirectoryURL
 
+    /// 「写盘」与「清盘」的互斥闸门。
+    ///
+    /// 这不是防御性冗余：`save` 把编码后的 JSON 派发到 global 后台队列，
+    /// 而清盘在另一条队列上删同一个目录。没有这道锁，一次在途的写可以落在
+    /// 清理之后，给一本已删除的书留下一个永远读不到、也永远删不掉的缓存文件
+    /// （`StorageAnalyzer` 只扫 extracted / backup 两个根，孤儿检测看不见它）。
+    private let diskLock = NSLock()
+
+    /// 磁盘代次。清盘时递增；`save` 落盘前校验，代次不符即丢弃。
+    ///
+    /// 光有锁不够：锁只保证「两者不并发」，不保证「清理之前排队的写
+    /// 不会在清理之后落盘」——编码耗时正是那段窗口。
+    private var diskGeneration: Int = 0
+
     private init() {
         purgeLegacySchemeFiles()
     }
@@ -203,17 +217,30 @@ final class PaginationCache {
         memory[key] = layout
         lock.unlock()
 
+        // 代次必须在**调用时**同步捕获，不能在后台块里读：
+        // 编码要几十到几百毫秒，这期间若发生一次清盘，块里读到的就是新代次，
+        // 这份属于旧书的数据会被误判成"清理之后的新写"落进已清空的目录。
+        diskLock.lock()
+        let generation = diskGeneration
+        diskLock.unlock()
+
         let url = fileURL(for: key)
         let pageCount = layout.pageCount
         // 空表不写：绝大多数章没有目录锚点，省掉每个缓存文件里的一个空字典。
         let anchors: [String: Int]? = layout.anchors.isEmpty ? nil : layout.anchors
-        DispatchQueue.global(qos: .background).async {
+        DispatchQueue.global(qos: .background).async { [weak self] in
             guard let attrData = try? NSKeyedArchiver.archivedData(
                 withRootObject: sourceAttributedString,
                 requiringSecureCoding: false
             ) else { return }
             let entry = DiskEntry(attributedStringData: attrData, pageCount: pageCount, anchors: anchors)
             guard let json = try? JSONEncoder().encode(entry) else { return }
+            guard let self else { return }
+            // 校验代次与写文件必须在同一把锁里，否则
+            // 「校验通过 → 清盘删空 → 本块才写」仍会留下一个已删书的缓存文件。
+            self.diskLock.lock()
+            defer { self.diskLock.unlock() }
+            guard self.diskGeneration == generation else { return }
             try? json.write(to: url, options: .atomic)
         }
     }
@@ -231,19 +258,38 @@ final class PaginationCache {
     /// 内存层立即清空，磁盘层派发到后台——调用方不关心何时删完时用这个。
     func invalidateAll() {
         invalidateMemory()
-        let dir = diskURL
-        DispatchQueue.global(qos: .background).async {
-            Self.purgeDiskContents(at: dir)
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            self?.purgeDisk()
         }
     }
 
+    /// 清空磁盘层，返回释放的字节数。同步，后台调用。
+    ///
+    /// **所有清盘路径的唯一入口**（存储管理清缓存、一键清除书籍数据、
+    /// 切换排版配置导致的整层失效）。与 `save` 的后台落盘共用 `diskLock`：
+    /// 清盘期间要么写盘先完成（随后被一并删掉），要么被代次校验丢弃——
+    /// 不会出现"清完之后又冒出一个已删书的缓存文件"。
+    ///
+    /// 只动磁盘，不动内存层：内存字典归 `invalidateMemory()` 管，
+    /// 调用方按「后台删盘 → 主线程清内存」的顺序分开调用。
+    @discardableResult
+    func purgeDisk() -> Int64 {
+        diskLock.lock()
+        defer { diskLock.unlock() }
+        diskGeneration &+= 1
+        return Self.purgeDiskContents(at: diskURL)
+    }
+
     /// 磁盘层同步清理，返回释放的字节数。
+    ///
+    /// **私有**：清盘必须经过 `purgeDisk()`，由它递增代次并与 `save` 的落盘互斥。
+    /// 直接调这里会绕过闸门，重新打开"清完之后又冒出已删书缓存"的窗口。
     ///
     /// 「存储管理 → 清除缓存」需要删完立刻重新统计占用，异步版本会让
     /// 重新扫描跑到删除之前，UI 上表现成"点了没反应"。内存层仍由
     /// `invalidateAll()` 负责，调用方把两者分开在不同线程调用即可。
     @discardableResult
-    static func purgeDiskContents(at dir: URL = PaginationCache.diskDirectoryURL) -> Int64 {
+    private static func purgeDiskContents(at dir: URL = PaginationCache.diskDirectoryURL) -> Int64 {
         let contents = (try? FileManager.default.contentsOfDirectory(
             at: dir,
             includingPropertiesForKeys: [.isRegularFileKey, .totalFileAllocatedSizeKey]

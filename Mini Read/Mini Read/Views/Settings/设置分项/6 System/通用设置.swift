@@ -77,8 +77,6 @@ struct GeneralSettingsView: View {
                 .accessibilityHint("将所有设置还原为初始值，书籍与阅读进度不会受影响")
             } header: {
                 Text("重置")
-            } footer: {
-                Text("将所有设置项还原为初始值，包括文字排版、主题、书库视图与笔记偏好。你的书籍、阅读进度、书签和高亮不会被删除。")
             }
         }
         .modifier(CustomListModifier(title: "通用设置"))
@@ -176,12 +174,6 @@ struct GeneralSettingsView: View {
             .accessibilityHint("从「文件」应用选择之前保存或他人分享的配置文件")
         } header: {
             Text("配置文件")
-        } footer: {
-            if profiles.isEmpty {
-                Text("把当前偏好保存成配置文件，随时一键套用；也可以从「文件」导入之前保存或他人分享的配置文件。")
-            } else {
-                Text("轻点配置文件即可套用到当前设置；左滑删除，右滑导出到「文件」App。配置文件仅保存在本机，不影响你的书籍与阅读数据。")
-            }
         }
     }
 

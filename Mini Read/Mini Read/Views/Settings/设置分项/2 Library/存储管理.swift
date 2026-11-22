@@ -161,12 +161,16 @@ struct StorageSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-        } header: {
-            Text("存储概览")
-        } footer: {
+
+            // 清理结果原先只挂在 Section footer 上；footer 移除后改为区块内的一行，
+            // 否则「清除缓存 / 清理残留文件」这类破坏性操作就没有任何可见反馈。
             if let freedMessage {
                 Text(freedMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
+        } header: {
+            Text("存储概览")
         }
     }
 
@@ -184,8 +188,6 @@ struct StorageSettingsView: View {
             }
         } header: {
             Text("占用明细")
-        } footer: {
-            Text("统计的是磁盘实际占用，与系统设置中显示的本 App 体积一致。")
         }
     }
 
@@ -215,8 +217,6 @@ struct StorageSettingsView: View {
             }
         } header: {
             Text("书籍")
-        } footer: {
-            Text("共 \(books.count) 本。在这里删除书籍会同时移除它的文件与阅读进度。")
         }
     }
 
@@ -269,17 +269,6 @@ struct StorageSettingsView: View {
             .disabled(isScanning || currentCacheBytes == 0)
         } header: {
             Text("缓存设置")
-        } footer: {
-            cacheFooter
-        }
-    }
-
-    @ViewBuilder
-    private var cacheFooter: some View {
-        if isOverCacheLimit {
-            Text("当前缓存已超过设定的 \(settings.cacheSizeLimit) MB 上限。关闭「空间不足时自动清理」可保留缓存以加快翻页。")
-        } else {
-            Text("缓存用于加速已读章节的重新打开，不会保存你的阅读进度。调低上限会在空间紧张时更早触发清理。")
         }
     }
 
@@ -311,8 +300,6 @@ struct StorageSettingsView: View {
             }
         } header: {
             Text("维护")
-        } footer: {
-            Text("残留文件是磁盘上存在、但书库里已没有对应书籍的数据，通常来自导入中断或被强制退出的删除操作。")
         }
     }
 
@@ -327,10 +314,6 @@ struct StorageSettingsView: View {
             }
         } header: {
             Text("配置数据")
-        } footer: {
-            Text(allSettings.count > 1
-                 ? "检测到 \(allSettings.count) 条设置记录（正常应为 1 条）。这是早期版本留下的脏数据，修复后只保留你真正改动过的那一条。"
-                 : "设置只有一份记录，占用可忽略不计。")
         }
     }
 
@@ -347,8 +330,6 @@ struct StorageSettingsView: View {
             InfoRow(title: "字体与数据库", value: "Library/Application Support")
         } header: {
             Text("存储位置")
-        } footer: {
-            Text("书籍与阅读数据只保存在本机 App 沙盒内，App 不提供云端同步；缓存目录在系统空间紧张时可能被自行清空。")
         }
     }
 
@@ -359,8 +340,6 @@ struct StorageSettingsView: View {
             AppDirectoryMonitorView()
         } header: {
             Text("目录浏览器")
-        } footer: {
-            Text("仅在「系统设置 → 开发者模式」开启时显示。")
         }
     }
 
@@ -368,10 +347,6 @@ struct StorageSettingsView: View {
 
     private var currentCacheBytes: Int64 {
         report?.bytes(for: .cache) ?? 0
-    }
-
-    private var isOverCacheLimit: Bool {
-        currentCacheBytes > Int64(settings.cacheSizeLimit) * 1_000_000
     }
 
     /// 该分类占 App 总占用的比例，用于行内细条；无数据时按 0 处理。

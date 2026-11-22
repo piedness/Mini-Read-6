@@ -23,6 +23,14 @@ struct PageViewControllerRepresentable: UIViewControllerRepresentable {
     /// 目录派生数据的版本号。`allSrcs` / `titleBySrc` 每次打开一本书只整体替换一次，
     /// 用它做 O(1) 判断即可，不必每帧对数组和字典做全量深比较。
     let derivedVersion: Int
+
+    /// 全书标注快照 + 版本号。版本号用于 O(1) 判断，
+    /// 不拿数组本身做逐帧深比较（标注可能有几百条）。
+    let annotations: [AnnotationSnapshot]
+    let annotationsVersion: Int
+    /// 从笔记列表跳转后的聚焦请求。
+    let annotationFocusRequest: AnnotationFocusRequest?
+
     var onChapterChange: ((String) -> Void)?
     /// 第一页真正上屏时回调一次。供上层开闸放行转场静默窗内的写入
     /// （见 `ContentsPanelViewModel.openWriteGateAndCommit`）。
@@ -31,12 +39,23 @@ struct PageViewControllerRepresentable: UIViewControllerRepresentable {
     /// （扉页、空白页）——书签按钮据此决定可用与否。
     var onLocationChange: ((ReaderLocation?) -> Void)?
 
+    // MARK: 标注交互出口
+
+    var onHighlightSelection: ((ReaderTextSelection, AnnotationStyle, AnnotationColor) -> Void)?
+    var onNoteSelection: ((ReaderTextSelection) -> Void)?
+    var onAnnotationActivate: ((UUID) -> Void)?
+    var onDeleteAnnotation: ((UUID) -> Void)?
+    /// 点击纸面（未命中标注）。替代原先 SwiftUI 层的 simultaneousGesture。
+    var onBackgroundTap: (() -> Void)?
+
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator {
         var lastSrc: String = ""
         var lastDerivedVersion: Int = -1
         var lastTOCJumpRequestID: UUID?
+        var lastAnnotationsVersion: Int = -1
+        var lastFocusRequestID: UUID?
     }
 
     func makeUIViewController(context: Context) -> ViewController {
@@ -54,6 +73,12 @@ struct PageViewControllerRepresentable: UIViewControllerRepresentable {
         vc.onChapterChange = onChapterChange
         vc.onFirstPageShown = onFirstPageShown
         vc.onLocationChange = onLocationChange
+        vc.onHighlightSelection = onHighlightSelection
+        vc.onNoteSelection = onNoteSelection
+        vc.onAnnotationActivate = onAnnotationActivate
+        vc.onDeleteAnnotation = onDeleteAnnotation
+        vc.onBackgroundTap = onBackgroundTap
+        vc.updateAnnotations(annotations)
         return vc
     }
 
@@ -61,12 +86,33 @@ struct PageViewControllerRepresentable: UIViewControllerRepresentable {
         let coord = context.coordinator
         uiViewController.updateHorizontalSizeClass(isRegular: isRegular)
 
+        // 标注交互的闭包每次更新都重新挂一遍：它们会读到当前的阅读设置
+        // （默认颜色/样式）与 SwiftUI 状态，只在 make 时挂一次会用到旧值。
+        uiViewController.onHighlightSelection = onHighlightSelection
+        uiViewController.onNoteSelection = onNoteSelection
+        uiViewController.onAnnotationActivate = onAnnotationActivate
+        uiViewController.onDeleteAnnotation = onDeleteAnnotation
+        uiViewController.onBackgroundTap = onBackgroundTap
+
         // 目录结构只在解析完成时变一次；版本号相等就说明下面的两份数据都是同一批，
         // 逐帧深比较（`!=` 会遍历整个数组/字典）在长目录书上足以拖慢首屏。
         if coord.lastDerivedVersion != derivedVersion {
             coord.lastDerivedVersion = derivedVersion
             uiViewController.updateAllSrcs(allSrcs)
             uiViewController.updateTitleBySrc(titleBySrc)
+        }
+
+        // 标注同样走版本号：一次高亮/删除只下发一次，
+        // 不会因为 SwiftUI 的无关重绘把整章标注重新解析一遍。
+        if coord.lastAnnotationsVersion != annotationsVersion {
+            coord.lastAnnotationsVersion = annotationsVersion
+            uiViewController.updateAnnotations(annotations)
+        }
+
+        if let request = annotationFocusRequest,
+           coord.lastFocusRequestID != request.id {
+            coord.lastFocusRequestID = request.id
+            uiViewController.focusAnnotation(request.annotationID)
         }
 
         // 目录跳转是一个比普通 currentSrc 同步更强的 intent：它明确要求
@@ -105,7 +151,9 @@ struct PageViewControllerRepresentable: UIViewControllerRepresentable {
 
 final class ViewController: UIViewController,
                              UIPageViewControllerDelegate,
-                             UIPageViewControllerDataSource {
+                             UIPageViewControllerDataSource,
+                             UIGestureRecognizerDelegate,
+                             UIEditMenuInteractionDelegate {
 
     // MARK: - Properties
 
@@ -206,8 +254,76 @@ final class ViewController: UIViewController,
 
     private var sharedSelectionAnchor: Int = 0
     /// 跨页选中的长按识别器。挂在 `self.view` 上，随 VC 存活而不是随 pageVC，
-    /// 因此必须自己保证只装一次（见 `setupiPadSelectionGesture`）。
+    /// 因此必须自己保证只装一次（见 `setupSelectionGesture`）。
     private var selectionGesture: UILongPressGestureRecognizer?
+
+    // MARK: - 标注
+
+    /// 每章一份标注投影。键是章相对路径。
+    ///
+    /// 只持有投影、不持有 SwiftData 对象：绘制层在每帧 draw 里访问的必须是
+    /// 值类型，不能是可能触发 fault 的 @Model。
+    private var annotationStates: [String: ChapterAnnotationState] = [:]
+
+    /// 全书标注快照。由 SwiftUI 侧按版本号下发（见 `updateAnnotations`）。
+    private var annotationSnapshots: [AnnotationSnapshot] = []
+
+    /// 从笔记列表跳转后待闪烁的标注 id。目标章可能还在加载，
+    /// 因此要等到 `showPages` 真正落页后再消费。
+    private var pendingAnnotationFocusID: UUID?
+
+    /// 留白/扉页用的背景点击。正文区域内的点按由 `TextRenderView` 自己处理
+    /// （它在触摸链里更深，能先于翻页点击识别）。
+    private var marginTapGesture: UITapGestureRecognizer?
+    /// 选中文本后的系统编辑菜单。
+    private var editMenuInteraction: UIEditMenuInteraction?
+    /// 当前选中的文本（章节 + 字符区间 + 原文）。
+    private var activeSelection: ReaderTextSelection?
+    /// 正在拖动的选区属于哪一章。
+    ///
+    /// 拖动期间只维护共享的 `SelectionState`（画高亮），**不**每次触摸事件都
+    /// 去桥接整章文本取原文——选区可能跨十几页，逐字复制会变成 O(n²)。
+    /// 原文只在抬手、真正要弹菜单时取一次（见 `handleSelectionLongPress` 的 `.ended`）。
+    private var selectionSrc: String?
+
+    /// 正在拖拽选区手柄。
+    ///
+    /// 这个标志决定菜单退场时要不要清选区：手柄拖动期间菜单只是让位，
+    /// 选区必须留着给手柄继续调。
+    private var isAdjustingSelection = false
+
+    /// 长按落在已有标注上：抬手后打开编辑页，而不是弹操作菜单。
+    private var pendingEditorAnnotationID: UUID?
+
+    /// 菜单展示/退场的计数。
+    ///
+    /// 只用一个 bool 会在"手柄按下 → 菜单退场动画还没结束 → 手柄已经抬起
+    /// 并弹出新菜单"时错位：旧菜单的退场回调会把新菜单误判成已关闭。
+    /// 用计数判断"此刻是否真的还有菜单在场"。
+    private var presentedMenuCount = 0
+    private var dismissedMenuCount = 0
+    private var isSelectionMenuPresented: Bool {
+        presentedMenuCount > dismissedMenuCount
+    }
+
+    /// 本次菜单退场是手柄拖动引起的（不能清选区）。
+    private var menuDismissedForHandleDrag = false
+
+    /// 手柄抬起后已经排了一次"把菜单放回来"。
+    ///
+    /// 旧菜单的退场回调可能比新菜单的呈现更早到；这个标志让它在
+    /// 0.12s 的空窗里不要恢复翻页手势、也不要把选区清掉。
+    private var expectsSelectionMenu = false
+
+    /// 标注交互的上行出口。持久化全部由 SwiftUI 侧的 ViewModel 负责，
+    /// 阅读器只负责"选中了什么"与"点了哪一处"。
+    var onHighlightSelection: ((ReaderTextSelection, AnnotationStyle, AnnotationColor) -> Void)?
+    var onNoteSelection: ((ReaderTextSelection) -> Void)?
+    var onAnnotationActivate: ((UUID) -> Void)?
+    var onDeleteAnnotation: ((UUID) -> Void)?
+    /// 点击纸面（未命中标注）时切换阅读控件。替代原先 SwiftUI 层的
+    /// `.simultaneousGesture(TapGesture())`，让"点标注"与"点背景"只有一个决策点。
+    var onBackgroundTap: (() -> Void)?
 
     /// 待执行的设置重排任务（用于合并连续变更）
     private var settingsReloadWork: DispatchWorkItem?
@@ -482,9 +598,9 @@ final class ViewController: UIViewController,
         // 与 applySettingsChange 同序：当前页先重排上屏，全书索引延后。
         reloadPages()
         scheduleBookPageCountIndexing()
-        // 跨页选中只在 regular 下成立。compact → regular 时补装手势
-        // （viewDidLoad 那一刻如果是 compact，这个手势从来没被加过）。
-        setupiPadSelectionGesture()
+        // 跨页选中现在 iPhone / iPad 都支持。compact → regular 时补装手势
+        // （viewDidLoad 那一刻如果尺寸类未就绪，这个手势可能还没装）。
+        setupSelectionGesture()
     }
 
     func navigateToSrc(_ src: String, resumeProgress: Bool = true) {
@@ -576,6 +692,8 @@ final class ViewController: UIViewController,
     /// `previousSrc` 可能只是"上一次请求的章"（它从未上屏），按它回退会让
     /// `currentSrc`、目录高亮和屏幕三者再次错位。
     private func revertNavigation(to fallbackSrc: String) {
+        // 跳转没成功：聚焦请求也不能留到下一次无关导航再闪。
+        pendingAnnotationFocusID = nil
         let onScreenSrc = visibleFrontController.flatMap { findLocation(of: $0)?.src }
         let target = onScreenSrc ?? fallbackSrc
         guard !target.isEmpty, target != currentSrc else { return }
@@ -924,6 +1042,8 @@ final class ViewController: UIViewController,
         // 放在 setViewControllers 之后：此刻读者看到的是纸面，而 CPU 已空出来。
         markFirstPageShown()
         reportVisibleLocation()
+        // 从笔记列表跳转过来时，目标页现在才真正上屏：此刻闪一下。
+        consumePendingAnnotationFocusIfPossible()
         return true
     }
 
@@ -1361,6 +1481,12 @@ final class ViewController: UIViewController,
         chromePlacement: ReaderChrome.Placement,
         hasCoverPage: Bool = false
     ) -> [UIViewController] {
+        // 本章的标注投影：同一章的每一页共享同一份。
+        // 必须在建 VC 之前 attach 当前 layout——重排/换字号后旧的解析结果作废，
+        // 由这里统一按新正文重新解析一次。
+        let annotationState = annotationState(for: src)
+        annotationState.attach(layout: layout)
+
         var vcs: [UIViewController] = []
         for idx in 0..<layout.pageCount {
             let vc = TextViewControllerTest(
@@ -1371,8 +1497,29 @@ final class ViewController: UIViewController,
                 margins: margins,
                 chapterTitle: titleBySrc[src],
                 chromePlacement: chromePlacement,
-                selectionState: layout.selectionState
+                selectionState: layout.selectionState,
+                annotationState: annotationState
             )
+            vc.onAnnotationTap = { [weak self] id in
+                self?.handleAnnotationTap(id)
+            }
+            vc.onAnnotationEdit = { [weak self] id in
+                self?.onAnnotationActivate?(id)
+            }
+            vc.onBackgroundTap = { [weak self] in
+                self?.handleTextBackgroundTap()
+            }
+            vc.onSelectionHandleTouchDown = { [weak self, weak vc] handle, range in
+                guard let self, let vc else { return }
+                self.beginSelectionHandleDrag(handle, range: range, in: vc)
+            }
+            vc.onSelectionHandleMoved = { [weak self, weak vc] handle, point in
+                guard let self, let vc else { return }
+                self.moveSelectionHandle(handle, to: point, in: vc)
+            }
+            vc.onSelectionHandleDragEnded = { [weak self] in
+                self?.endSelectionHandleDrag()
+            }
             vc.pageNumberValuesProvider = { [weak self] in
                 guard let self else { return (current: nil, total: nil) }
                 switch chromePlacement.pageNumberFormat {
@@ -1950,7 +2097,7 @@ final class ViewController: UIViewController,
             pageVC.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
         pageVC.didMove(toParent: self)
-        setupiPadSelectionGesture()
+        setupSelectionGesture()
     }
 
     private func rebuildPageVC() {
@@ -2198,6 +2345,7 @@ final class ViewController: UIViewController,
         // 页级位置在这里才真正变了（动画已贴好、VC 已换），书签按钮的
         // 「当前页是否已加书签」据此刷新。
         reportVisibleLocation()
+        consumePendingAnnotationFocusIfPossible()
     }
 
     // MARK: - UIPageViewControllerDataSource
@@ -2488,9 +2636,10 @@ final class ViewController: UIViewController,
         return isRegular ? .mid : .min
     }
 
-    // MARK: - iPad Cross-Page Selection
+    // MARK: - 文本选中与标注菜单
 
-    /// 在 self.view 上添加长按手势以实现跨页文本选中。
+    /// 在 self.view 上安装长按选中与留白点击；正文内的点按由
+    /// `TextRenderView` 自己处理（见其 `tapRecognizer`）。
     /// 手势在 self.view 上而非独立 overlay——避免了 overlay 截获所有触摸
     /// 导致 UIPageViewController 翻页手势失效的问题。
     ///
@@ -2499,80 +2648,804 @@ final class ViewController: UIViewController,
     /// 于是同一处正文上有 N 个长按识别器同时在跑：`.began` 里的
     /// `setPageCurlGesturesEnabled(false)` 被触发 N 次、触觉震 N 下，
     /// 而且 N 个识别器各自维护一份 start/end，选中范围会来回跳。
-    private func setupiPadSelectionGesture() {
-        guard isRegular, selectionGesture == nil else { return }
+    private func setupSelectionGesture() {
+        guard selectionGesture == nil else { return }
+
         let longPress = UILongPressGestureRecognizer(
             target: self,
             action: #selector(handleSelectionLongPress(_:))
         )
-        longPress.minimumPressDuration = 0.5
+        longPress.minimumPressDuration = 0.45
         view.addGestureRecognizer(longPress)
         selectionGesture = longPress
+
+        // 正文区域的点按由 TextRenderView 自己处理（命中标注 / 背景）。
+        // 这里只补一个"留白、扉页、空白页"用的背景点击，保证点纸面任何位置
+        // 都能切换阅读控件——与改造前 SwiftUI 层覆盖整屏的手势一致。
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleMarginTap(_:)))
+        tap.delegate = self
+        tap.cancelsTouchesInView = false
+        view.addGestureRecognizer(tap)
+        marginTapGesture = tap
+
+        let interaction = UIEditMenuInteraction(delegate: self)
+        view.addInteraction(interaction)
+        editMenuInteraction = interaction
     }
 
     @objc private func handleSelectionLongPress(_ gesture: UILongPressGestureRecognizer) {
-        guard isRegular else { return }
         let point = gesture.location(in: view)
 
         switch gesture.state {
         case .began:
+            // 新手势开始 = 上一次手柄拖动一定已经结束（手柄命中区由
+            // shouldReceive 挡掉）。清掉可能悬挂的调整态。
+            isAdjustingSelection = false
             setPageCurlGesturesEnabled(false)
-            guard let (_, charIdx) = hitTestSelection(at: point),
-                  let sharedState = currentChapterSelectionState() else {
-                setPageCurlGesturesEnabled(true)
+            // 菜单开着时也不能靠点击翻页：否则点菜单外面一下，
+            // 选中没了、页也翻过去了。松手后的菜单生命周期负责恢复。
+            setPageTurnTapGesturesEnabled(false)
+            // 同一次抬手会同时结束长按与触发点按；不关掉点按，
+            // 刚弹出的菜单会被"点空白"立刻清掉。
+            setTextTapEnabled(false)
+            guard let (textVC, charIdx) = hitTestText(at: point) else {
+                pendingEditorAnnotationID = nil
+                finishSelectionAction()
                 return
             }
-            sharedSelectionAnchor = charIdx
-            sharedState.startIndex = charIdx
-            sharedState.endIndex = charIdx
+
+            // 长按已有标注：选中它的整段，抬手后打开编辑页。
+            // 长按空白正文：才走"选词 + 弹操作菜单"的路径。
+            if let annotation = textVC.annotationState.item(atCharacter: charIdx) {
+                pendingEditorAnnotationID = annotation.id
+                selectionSrc = findLocation(of: textVC)?.src
+
+                let state = textVC.selectionState
+                state.startIndex = annotation.range.location
+                state.endIndex = NSMaxRange(annotation.range)
+                activeSelection = nil
+
+                triggerHaptic(.medium)
+                return
+            }
+
+            pendingEditorAnnotationID = nil
+
+            // 长按先选中一个"词/短语"，而不是单个字符：中文没有空格，
+            // 单个字符既不好点中，也不符合"我要标这一句"的意图。
+            let wordRange = wordRange(at: charIdx, in: textVC)
+            sharedSelectionAnchor = wordRange.location
+
+            let state = textVC.selectionState
+            state.startIndex = wordRange.location
+            state.endIndex = NSMaxRange(wordRange)
+            selectionSrc = findLocation(of: textVC)?.src
+            activeSelection = nil
+
             // 走统一总闸（原来直接 new 一个 generator，绕过了「触觉反馈」开关）。
             // 只在这一处放电：进入选择模式是"状态切换"，值得一次明确的反馈；
             // `.changed` 里每跨一个字都震会变成噪音，视觉高亮本身就是连续反馈。
             triggerHaptic(.medium)
 
         case .changed:
-            guard let sharedState = currentChapterSelectionState(),
-                  let (_, charIdx) = hitTestSelection(at: point) else { return }
+            // 长按在标注上：这一段只用于"打开编辑页"，不跟着手指改范围。
+            guard pendingEditorAnnotationID == nil else { return }
+
+            guard let selectionSrc,
+                  let (textVC, charIdx) = hitTestText(at: point),
+                  let location = findLocation(of: textVC),
+                  location.src == selectionSrc
+            else { return }
+
             let s = min(sharedSelectionAnchor, charIdx)
             let e = max(sharedSelectionAnchor, charIdx)
-            if sharedState.startIndex != s || sharedState.endIndex != e {
-                sharedState.startIndex = s
-                sharedState.endIndex = e
+            let state = textVC.selectionState
+            guard state.startIndex != s || state.endIndex != e else { return }
+
+            state.startIndex = s
+            state.endIndex = e
+
+        case .ended:
+            // 长按标注：抬手后打开编辑页。
+            if let id = pendingEditorAnnotationID {
+                pendingEditorAnnotationID = nil
+                finishSelectionAction()
+                DispatchQueue.main.async { [weak self] in
+                    self?.onAnnotationActivate?(id)
+                }
+                return
             }
 
-        case .ended, .cancelled, .failed:
-            setPageCurlGesturesEnabled(true)
+            // 抬手才取原文：拖动期间只画选中，不做整章文本桥接。
+            guard let src = selectionSrc,
+                  let textVC = visibleTextController(for: src),
+                  let range = textVC.selectionState.range,
+                  range.length > 0,
+                  let selection = makeSelection(textVC: textVC, range: range)
+            else {
+                finishSelectionAction()
+                return
+            }
+            activeSelection = selection
 
-        default: break
+            // 手势结束，但菜单仍占着这次选中：翻页手势保持禁用，
+            // 直到菜单真正关闭（见 willDismissMenuFor）。原先在 `.ended`
+            // 就恢复，读者能一边看菜单一边翻页。
+            presentSelectionMenu(for: selection)
+            // 抬手已经过去，再把正文点按放回来。延后一拍，
+            // 避免同一次抬手被当成"点空白"。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self, !self.isAdjustingSelection else { return }
+                self.setTextTapEnabled(true)
+            }
+
+        case .cancelled, .failed:
+            finishSelectionAction()
+
+        default:
+            break
         }
     }
 
-    /// 在 self.view 坐标系中查找触摸点对应的 TextRenderView 和章节全局字符索引
-    private func hitTestSelection(at point: CGPoint) -> (TextRenderView, Int)? {
-        guard let pageVCs = pageVC.viewControllers else { return nil }
-        for vc in pageVCs {
+    /// 在 self.view 坐标系中查找触摸点对应的文本页与章节全局字符索引。
+    private func hitTestText(at point: CGPoint) -> (TextViewControllerTest, Int)? {
+        for vc in pageVC.viewControllers ?? [] {
             guard let textVC = vc as? TextViewControllerTest,
                   let rv = textVC.textRenderView else { continue }
-            let local = view.convert(point, to: rv)
+            let local = rv.convert(point, from: view)
             if let ci = rv.characterIndex(at: local) {
-                return (rv, ci)
+                return (textVC, ci)
             }
         }
         return nil
     }
 
-    /// 获取当前可见页面的共享 SelectionState
-    private func currentChapterSelectionState() -> SelectionState? {
-        guard let first = visibleFrontController as? TextViewControllerTest else { return nil }
-        return first.selectionState
+    /// 把落点扩成一个词/短语。
+    ///
+    /// 用**有界局部扫描**（向两侧最多 48 个字符，遇空白或标点停），
+    /// 不用 `NLTokenizer` 全章分词：三十万字的章节在主线程上分词会明显卡顿，
+    /// 而长按只需要一个"看起来合理"的初始范围，读者还可以继续拖。
+    private func wordRange(at index: Int, in textVC: TextViewControllerTest) -> NSRange {
+        let text = textVC.chapterText
+        guard text.length > 0 else { return NSRange(location: 0, length: 0) }
+
+        let idx = min(max(0, index), text.length - 1)
+        let terminators = CharacterSet.whitespacesAndNewlines
+            .union(.punctuationCharacters)
+
+        func cluster(at i: Int) -> NSRange {
+            text.rangeOfComposedCharacterSequence(at: min(max(0, i), text.length - 1))
+        }
+        func isBoundary(at i: Int) -> Bool {
+            guard i >= 0, i < text.length else { return true }
+            let piece = text.substring(with: cluster(at: i))
+            return piece.unicodeScalars.allSatisfy { terminators.contains($0) }
+        }
+
+        // 长按落在空白/标点上时，向前/后找一个最近的实字作为种子。
+        // 否则会先选中一个空格，裁剪后又变成空选区，读者按了半天没有反应。
+        var seed = idx
+        if isBoundary(at: idx) {
+            var distance = 1
+            while distance <= 24 {
+                if idx + distance < text.length, !isBoundary(at: idx + distance) {
+                    seed = idx + distance
+                    break
+                }
+                if idx - distance >= 0, !isBoundary(at: idx - distance) {
+                    seed = idx - distance
+                    break
+                }
+                distance += 1
+            }
+        }
+
+        var start = cluster(at: seed).location
+        var steps = 0
+        while start > 0, steps < 48 {
+            let previous = cluster(at: start - 1)
+            guard !isBoundary(at: previous.location) else { break }
+            start = previous.location
+            steps += 1
+        }
+
+        var end = NSMaxRange(cluster(at: seed))
+        steps = 0
+        while end < text.length, steps < 48 {
+            let next = cluster(at: end)
+            guard !isBoundary(at: next.location) else { break }
+            end = NSMaxRange(next)
+            steps += 1
+        }
+
+        if end <= start {
+            end = min(text.length, start + 1)
+        }
+        return NSRange(location: start, length: end - start)
     }
 
-    /// 禁用/启用 UIPageViewController 的翻页手势
-    private func setPageCurlGesturesEnabled(_ enabled: Bool) {
-        for gr in pageVC.gestureRecognizers {
-            if gr is UIPanGestureRecognizer {
-                gr.isEnabled = enabled
+    /// 把字符区间包装成可跨层传递的选中结果（裁剪空白 + 取原文）。
+    private func makeSelection(
+        textVC: TextViewControllerTest,
+        range: NSRange
+    ) -> ReaderTextSelection? {
+        guard let location = findLocation(of: textVC) else { return nil }
+        let text = textVC.chapterText
+        let trimmed = AnnotationResolver.trimmed(range, in: text)
+        let quote = AnnotationResolver.quote(in: trimmed, text: text)
+        guard trimmed.length > 0, !quote.isEmpty else { return nil }
+
+        return ReaderTextSelection(
+            src: location.src,
+            range: trimmed,
+            quote: quote,
+            chapterTitle: titleBySrc[location.src] ?? ""
+        )
+    }
+
+    private func presentSelectionMenu(for selection: ReaderTextSelection) {
+        expectsSelectionMenu = false
+
+        // 手柄拖动期间不弹菜单：等手柄抬起后的 end 再弹。
+        // （双指操作时，初次长按的 ended 可能晚于手柄按下。）
+        guard !isAdjustingSelection else { return }
+
+        guard let rect = selectionRect(for: selection) else {
+            finishSelectionAction()
+            return
+        }
+        let configuration = UIEditMenuConfiguration(
+            identifier: nil,
+            sourcePoint: CGPoint(x: rect.midX, y: rect.minY)
+        )
+        guard let interaction = editMenuInteraction else {
+            finishSelectionAction()
+            return
+        }
+        interaction.presentEditMenu(with: configuration)
+        presentedMenuCount &+= 1
+    }
+
+    private func visibleTextController(for src: String) -> TextViewControllerTest? {
+        for vc in pageVC.viewControllers ?? [] {
+            guard let textVC = vc as? TextViewControllerTest,
+                  let (locationSrc, _) = findLocation(of: textVC),
+                  locationSrc == src
+            else { continue }
+            return textVC
+        }
+        return nil
+    }
+
+    /// 选中区间在 self.view 坐标系里的外接矩形（菜单锚点 / 箭头定位）。
+    ///
+    /// 必须遍历**所有**可见页：iPad 双页下选区可能跨页，锚点页与
+    /// "包含这段文字的那一页"不一定是同一张。
+    private func selectionRect(for selection: ReaderTextSelection) -> CGRect? {
+        var union: CGRect?
+
+        for vc in pageVC.viewControllers ?? [] {
+            guard let textVC = vc as? TextViewControllerTest,
+                  let (locationSrc, _) = findLocation(of: textVC),
+                  locationSrc == selection.src
+            else { continue }
+
+            for rect in textVC.rects(for: selection.range) {
+                let converted = textVC.view.convert(rect, to: view)
+                union = union.map { $0.union(converted) } ?? converted
             }
+        }
+
+        return union
+    }
+
+    // MARK: - 点按路由
+
+    /// 正文区域的点按（来自 `TextRenderView`，未命中标注）。
+    private func handleTextBackgroundTap() {
+        // 有选中时，第一次点空白处只取消选中，不切换阅读控件——
+        // 这是文本选择的通用语义，也避免菜单刚消失又弹出一堆按钮。
+        if let textVC = visibleFrontController as? TextViewControllerTest,
+           textVC.selectionState.range != nil {
+            finishSelectionAction()
+            return
+        }
+        onBackgroundTap?()
+    }
+
+    /// 单击标注：选中它的整段并弹出操作菜单。
+    ///
+    /// 与长按的分工：
+    /// - 单击 = 选中 + 菜单（高亮、添加笔记、颜色、移除……）；
+    /// - 长按 = 打开「编辑标注」页。
+    private func handleAnnotationTap(_ id: UUID) {
+        guard let textVC = pageVC?.viewControllers?
+            .compactMap({ $0 as? TextViewControllerTest })
+            .first(where: { $0.annotationState.item(id: id) != nil }),
+              let item = textVC.annotationState.item(id: id),
+              let src = findLocation(of: textVC)?.src
+        else { return }
+
+        // 用当前正文重新取原文；取不到时退回标注自己的 quote。
+        let selection = makeSelection(textVC: textVC, range: item.range)
+            ?? ReaderTextSelection(
+                src: src,
+                range: item.range,
+                quote: item.quote,
+                chapterTitle: titleBySrc[src] ?? ""
+            )
+
+        // 选中整段标注，让读者看清这次操作的是哪一段。
+        // 用 selection.range 而不是 item.range：前者已经裁过首尾空白，
+        // 与菜单实际操作的区间保持一致。
+        let state = textVC.selectionState
+        state.startIndex = selection.range.location
+        state.endIndex = NSMaxRange(selection.range)
+        selectionSrc = src
+        activeSelection = selection
+
+        // 菜单开着时页不能翻；正文点按保留，方便直接换一条标注查看。
+        setPageCurlGesturesEnabled(false)
+        setPageTurnTapGesturesEnabled(false)
+
+        triggerHaptic(.light)
+        presentSelectionMenu(for: selection)
+    }
+
+    /// 留白 / 扉页 / 空白页的点按。
+    @objc private func handleMarginTap(_ gesture: UITapGestureRecognizer) {
+        if let textVC = visibleFrontController as? TextViewControllerTest,
+           textVC.selectionState.range != nil {
+            finishSelectionAction()
+            return
+        }
+        onBackgroundTap?()
+    }
+
+    // MARK: - 选区手柄
+
+    /// 手指按下手柄。
+    ///
+    /// 菜单如果正开着，先让它退场，但**不能清选区**——手柄还要继续用。
+    /// 标志必须在 `dismissMenu()` 之前置位：菜单的退场完成回调会检查它。
+    private func beginSelectionHandleDrag(
+        _ handle: SelectionHandle,
+        range: NSRange,
+        in textVC: TextViewControllerTest
+    ) {
+        guard !isAdjustingSelection else { return }
+        isAdjustingSelection = true
+        selectionSrc = findLocation(of: textVC)?.src
+
+        triggerHaptic(.light)
+        if isSelectionMenuPresented {
+            menuDismissedForHandleDrag = true
+            editMenuInteraction?.dismissMenu()
+        }
+
+        setPageCurlGesturesEnabled(false)
+        setPageTurnTapGesturesEnabled(false)
+        setTextTapEnabled(false)
+
+        // 极端时序下菜单退场可能先把选区清了：用按下瞬间的范围恢复。
+        let state = textVC.selectionState
+        if state.range == nil {
+            state.startIndex = range.location
+            state.endIndex = NSMaxRange(range)
+        }
+        activeSelection = nil
+    }
+
+    /// 手柄拖动到某个点（point 在 textVC.view 坐标系）。
+    private func moveSelectionHandle(
+        _ handle: SelectionHandle,
+        to point: CGPoint,
+        in textVC: TextViewControllerTest
+    ) {
+        guard isAdjustingSelection else { return }
+
+        // 跨页命中：iPad 双页时手柄可以从左页拖到右页。
+        let global = textVC.view.convert(point, to: view)
+        guard let (targetVC, charIdx) = hitTestText(at: global),
+              // 必须仍是同一章：翻页/换章后旧的字符索引对新章没有意义。
+              targetVC.selectionState === textVC.selectionState
+        else { return }
+
+        let state = textVC.selectionState
+        guard let range = state.range else { return }
+
+        // 用 textStorage 的长度，不桥接整章文本：手柄拖动是高频路径。
+        let textLength = targetVC.chapterLength
+        guard textLength > 0 else { return }
+
+        let index = min(max(0, charIdx), textLength - 1)
+        var start = range.location
+        var end = NSMaxRange(range)
+
+        switch handle {
+        case .start:
+            // 起点不能越过终点，至少留一个字。
+            start = min(index, end - 1)
+        case .end:
+            // 终点是"不包含"的上界：手指下的那个字也要选进来。
+            end = max(index + 1, start + 1)
+        }
+
+        guard start >= 0, end <= textLength, start < end else { return }
+        if state.startIndex != start || state.endIndex != end {
+            state.startIndex = start
+            state.endIndex = end
+        }
+    }
+
+    /// 手柄抬起：重新算一次原文，并把菜单放回来。
+    ///
+    /// 这里**不**恢复翻页手势：菜单马上要回来，等它退场时再统一恢复。
+    /// 否则 0.12s 的空窗里读者一划就翻页了。
+    private func endSelectionHandleDrag() {
+        guard isAdjustingSelection else { return }
+        isAdjustingSelection = false
+
+        // 正文点按可以恢复：让读者在菜单回来之前点一下取消。
+        // 翻页手势仍保持禁用，等菜单退场再恢复。
+        setTextTapEnabled(true)
+
+        guard let src = selectionSrc,
+              let textVC = visibleTextController(for: src),
+              let range = textVC.selectionState.range,
+              range.length > 0,
+              let selection = makeSelection(textVC: textVC, range: range)
+        else {
+            finishSelectionAction()
+            return
+        }
+
+        activeSelection = selection
+        expectsSelectionMenu = true
+
+        // 等抬手这一下过去，再把菜单放回来。期间读者若点了别处，
+        // activeSelection 会被清掉，这里就不再弹。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self,
+                  !self.isAdjustingSelection,
+                  self.activeSelection == selection
+            else { return }
+            self.presentSelectionMenu(for: selection)
+        }
+    }
+
+    /// 某个点是否落在可见页的选区手柄上。
+    private func isPointOnSelectionHandle(_ point: CGPoint) -> Bool {
+        for vc in pageVC.viewControllers ?? [] {
+            guard let textVC = vc as? TextViewControllerTest else { continue }
+            let local = textVC.view.convert(point, from: view)
+            if textVC.containsSelectionHandle(at: local) {
+                return true
+            }
+        }
+        return false
+    }
+
+    // MARK: - UIGestureRecognizerDelegate
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldReceive touch: UITouch
+    ) -> Bool {
+        let point = touch.location(in: view)
+
+        if gestureRecognizer === selectionGesture {
+            // 按在手柄上时不要重新选词：手柄有自己的拖动识别器，
+            // 两个长按同时跑会把选区来回重置。
+            return !isPointOnSelectionHandle(point)
+        }
+
+        guard gestureRecognizer === marginTapGesture else { return true }
+
+        // 手柄的命中区会伸进页边距；这一下必须让给手柄，
+        // 否则抬手时留白点击会把刚调好的选区清掉。
+        if isPointOnSelectionHandle(point) { return false }
+
+        // 正文区域交给 `TextRenderView` 自己的点按：它在触摸链里更深，
+        // 命中标注时可以先于翻页点击识别。这里只接管正文之外的留白。
+        return !isPointInsideTextArea(point)
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        // 留白点击与 pageCurl 的翻页点击可以同时生效——
+        // 与改造前 SwiftUI 的 simultaneousGesture 行为一致。
+        guard gestureRecognizer === marginTapGesture || otherGestureRecognizer === marginTapGesture else {
+            return false
+        }
+        return true
+    }
+
+    private func isPointInsideTextArea(_ point: CGPoint) -> Bool {
+        for vc in pageVC.viewControllers ?? [] {
+            guard let textVC = vc as? TextViewControllerTest,
+                  let rv = textVC.textRenderView
+            else { continue }
+            if rv.bounds.contains(rv.convert(point, from: view)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 启用/禁用 pageVC 子树里的翻页点击（pageCurl 的边缘点击）。
+    ///
+    /// 跳过 `TextRenderView` 自己：正文点按有独立生命周期
+    /// （见 `setTextTapEnabled`），不能被这里一并开关。
+    private func setPageTurnTapGesturesEnabled(_ enabled: Bool) {
+        guard let root = pageVC?.view else { return }
+
+        func walk(_ node: UIView) {
+            if !(node is TextRenderView) {
+                for recognizer in node.gestureRecognizers ?? [] where recognizer is UITapGestureRecognizer {
+                    recognizer.isEnabled = enabled
+                }
+            }
+            node.subviews.forEach(walk)
+        }
+        walk(root)
+    }
+
+    /// 启用/禁用正文区域的点按（长按选中期间临时关闭）。
+    private func setTextTapEnabled(_ enabled: Bool) {
+        for vc in pageVC.viewControllers ?? [] {
+            (vc as? TextViewControllerTest)?.setTextTapEnabled(enabled)
+        }
+    }
+
+    /// 清掉当前选中（章节内所有页共享同一个 SelectionState）。
+    private func clearSelection() {
+        for vc in pageVC.viewControllers ?? [] {
+            (vc as? TextViewControllerTest)?.selectionState.clear()
+        }
+        activeSelection = nil
+        selectionSrc = nil
+    }
+
+    /// 一次选中交互的收尾：清选中、恢复翻页与点按手势。幂等。
+    private func finishSelectionAction() {
+        isAdjustingSelection = false
+        expectsSelectionMenu = false
+        pendingEditorAnnotationID = nil
+        clearSelection()
+        setPageCurlGesturesEnabled(true)
+        setPageTurnTapGesturesEnabled(true)
+        setTextTapEnabled(true)
+    }
+
+    /// 禁用/启用翻页手势。
+    ///
+    /// 递归遍历而不是只看 `pageVC.gestureRecognizers`：`.scroll` 的 pan
+    /// 挂在内部的 `UIScrollView` 上，不在容器自身。只关容器那一层，
+    /// 读者拖动选区时页面仍会跟着滑。
+    private func setPageCurlGesturesEnabled(_ enabled: Bool) {
+        guard let root = pageVC?.view else { return }
+
+        func walk(_ node: UIView) {
+            for recognizer in node.gestureRecognizers ?? [] where recognizer is UIPanGestureRecognizer {
+                recognizer.isEnabled = enabled
+            }
+            node.subviews.forEach(walk)
+        }
+        walk(root)
+    }
+
+    // MARK: - UIEditMenuInteractionDelegate
+
+    func editMenuInteraction(
+        _ interaction: UIEditMenuInteraction,
+        targetRectFor configuration: UIEditMenuConfiguration
+    ) -> CGRect {
+        guard let selection = activeSelection,
+              let rect = selectionRect(for: selection)
+        else {
+            return CGRect(origin: configuration.sourcePoint, size: .zero)
+        }
+        return rect
+    }
+
+    func editMenuInteraction(
+        _ interaction: UIEditMenuInteraction,
+        menuFor configuration: UIEditMenuConfiguration,
+        suggestedActions: [UIMenuElement]
+    ) -> UIMenu? {
+        guard let selection = activeSelection else { return nil }
+
+        let settings = cachedSettings
+        let defaultStyle = AnnotationStyle(rawValue: settings?.defaultAnnotationStyle ?? "") ?? .highlight
+        let defaultColor = AnnotationColor(rawValue: settings?.defaultHighlightColor ?? "") ?? .yellow
+
+        // 已有标注时，菜单的勾选状态与"另一维"的默认值都跟着它走：
+        // 换颜色不会把下划线变回高亮，换样式也不会丢掉原来的颜色。
+        let existing = annotationState(for: selection.src).item(overlapping: selection.range)
+        let currentStyle = existing?.style ?? defaultStyle
+        let currentColor = existing?.color ?? defaultColor
+
+        // 样式子菜单
+        let styleMenu = UIMenu(
+            title: "标注样式",
+            image: UIImage(systemName: currentStyle.systemImage),
+            children: AnnotationStyle.allCases.map { style in
+                let action = UIAction(
+                    title: style.displayName,
+                    image: UIImage(systemName: style.systemImage)
+                ) { [weak self] _ in
+                    self?.onHighlightSelection?(selection, style, currentColor)
+                    self?.finishSelectionAction()
+                }
+                action.state = style == currentStyle ? .on : .off
+                return action
+            }
+        )
+
+        // 颜色子菜单
+        let colorMenu = UIMenu(
+            title: "标注颜色",
+            image: currentColor.menuImage(),
+            children: AnnotationColor.allCases.map { color in
+                let action = UIAction(
+                    title: color.displayName,
+                    image: color.menuImage()
+                ) { [weak self] _ in
+                    self?.onHighlightSelection?(selection, currentStyle, color)
+                    self?.finishSelectionAction()
+                }
+                action.state = color == currentColor ? .on : .off
+                return action
+            }
+        )
+
+        let note = UIAction(
+            title: "添加笔记",
+            image: UIImage(systemName: "note.text")
+        ) { [weak self] _ in
+            // 先收掉选中与菜单，再让 SwiftUI 弹 sheet：菜单还在退场时
+            // 直接 present 会和它的动画抢同一个事务。
+            self?.finishSelectionAction()
+            // 菜单退场动画还没结束时直接 present 会和它抢同一个事务，
+            // 延后一拍再交给 SwiftUI。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                self?.onNoteSelection?(selection)
+            }
+        }
+
+        let copy = UIAction(
+            title: "复制",
+            image: UIImage(systemName: "doc.on.doc")
+        ) { _ in
+            UIPasteboard.general.string = selection.quote
+        }
+
+        let share = UIAction(
+            title: "分享",
+            image: UIImage(systemName: "square.and.arrow.up")
+        ) { [weak self] _ in
+            // 同上：等菜单退场后再弹分享面板。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                self?.presentShareSheet(text: selection.quote)
+            }
+        }
+
+        // 分组布局：外观（样式/颜色）→ 笔记与分享 → 危险操作。
+        // 用 inline section 让系统自动画分隔线，而不是把 7 个动作平铺成一行行。
+        let appearanceSection = UIMenu(
+            options: .displayInline,
+            children: [styleMenu, colorMenu]
+        )
+        let utilitySection = UIMenu(
+            options: .displayInline,
+            children: [note, copy, share]
+        )
+
+        var sections: [UIMenuElement] = [appearanceSection, utilitySection]
+
+        // 选区与已有标注重叠时给出移除入口（Apple Books 的同一处操作）。
+        if let existing {
+            let remove = UIAction(
+                title: "移除标注",
+                image: UIImage(systemName: "trash"),
+                attributes: .destructive
+            ) { [weak self] _ in
+                self?.onDeleteAnnotation?(existing.id)
+                self?.finishSelectionAction()
+            }
+            sections.append(UIMenu(options: .displayInline, children: [remove]))
+        }
+
+        return UIMenu(children: sections)
+    }
+
+    func editMenuInteraction(
+        _ interaction: UIEditMenuInteraction,
+        willDismissMenuFor configuration: UIEditMenuConfiguration,
+        animator: UIEditMenuInteractionAnimating
+    ) {
+        animator.addCompletion { [weak self] in
+            guard let self else { return }
+            self.dismissedMenuCount &+= 1
+
+            let wasHandleDismissal = self.menuDismissedForHandleDrag
+            self.menuDismissedForHandleDrag = false
+
+            // 只要还有"正在拖手柄 / 本次退场是手柄引起 / 新菜单已排队或已呈现"
+            // 中的任一种，就不能恢复翻页手势、也不能清选区。
+            let keepSelection = self.isAdjustingSelection
+                || self.pendingEditorAnnotationID != nil
+                || wasHandleDismissal
+                || self.expectsSelectionMenu
+                || self.isSelectionMenuPresented
+
+            guard !keepSelection else { return }
+
+            self.setPageCurlGesturesEnabled(true)
+            self.setPageTurnTapGesturesEnabled(true)
+            self.setTextTapEnabled(true)
+            self.clearSelection()
+        }
+    }
+
+    private func presentShareSheet(text: String) {
+        guard !text.isEmpty else { return }
+        let controller = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        if let popover = controller.popoverPresentationController {
+            popover.sourceView = view
+            popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+            popover.permittedArrowDirections = []
+        }
+        present(controller, animated: true)
+    }
+
+    // MARK: - 标注投影
+
+    /// SwiftUI 侧下发全书标注快照（按版本号调用，见 Representable）。
+    func updateAnnotations(_ snapshots: [AnnotationSnapshot]) {
+        annotationSnapshots = snapshots
+
+        let grouped = Dictionary(grouping: snapshots, by: { $0.src })
+        for (src, state) in annotationStates {
+            state.apply(grouped[src] ?? [])
+        }
+        consumePendingAnnotationFocusIfPossible()
+    }
+
+    /// 某章的标注投影。首次访问时按当前快照创建；`layout` 在 `makeControllers`
+    /// 里 attach（同一章的每一页共享这一份）。
+    private func annotationState(for src: String) -> ChapterAnnotationState {
+        if let existing = annotationStates[src] { return existing }
+
+        let state = ChapterAnnotationState()
+        state.apply(annotationSnapshots.filter { $0.src == src })
+        annotationStates[src] = state
+        return state
+    }
+
+    /// 从笔记列表跳转后的聚焦提示。目标章可能尚未加载，先记下意图。
+    func focusAnnotation(_ id: UUID) {
+        pendingAnnotationFocusID = id
+        consumePendingAnnotationFocusIfPossible()
+    }
+
+    private func consumePendingAnnotationFocusIfPossible() {
+        guard let id = pendingAnnotationFocusID else { return }
+
+        // `pageVC` 是 IUO，首帧布局前可能还是 nil（焦点请求可能早于 viewDidLoad 到达）。
+        for vc in pageVC?.viewControllers?.compactMap({ $0 as? TextViewControllerTest }) ?? [] {
+            // 必须确认标注落在**这一页**：章内有、但不在可见页时，
+            // 直接 flash 会画不出任何东西，还会把 pending 清掉。
+            guard vc.annotation(id: id) != nil else { continue }
+            // 目标页可能刚交给 pageVC、view 还没加载：`TextRenderView` 尚未创建，
+            // 直接 flash 会静默丢失。先强制加载（本来也要上屏）。
+            vc.loadViewIfNeeded()
+            vc.flash(annotationID: id)
+            pendingAnnotationFocusID = nil
+            return
         }
     }
 

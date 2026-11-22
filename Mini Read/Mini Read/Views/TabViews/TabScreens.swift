@@ -66,7 +66,7 @@ struct HomeTabView: View {
                         .appBackground(settings: appSettings, radius: 18)
                 } else {
                     iPhoneOSHomeView()
-                        .appBackground(settings: appSettings, radius: 50)
+                        .appBackground(settings: appSettings, radius: 44)
                 }
             }
             .modifier(TabNavigationTitle(title: title))
@@ -79,7 +79,11 @@ struct HomeTabView: View {
                 )
             }
             .navigationDestination(isPresented: $showReadingStats) {
-                ReadingStatsView(settings: appSettings)
+                // 跟随外壳的平台约定：iPhone 有标题，iPad 不设标题。
+                ReadingStatsView(
+                    settings: appSettings,
+                    showsNavigationTitle: title != nil
+                )
             }
         }
     }
@@ -158,7 +162,7 @@ struct LibraryTabView: View {
                         .appBackground(settings: appSettings, radius: 18)
                 } else {
                     iPhoneOSLibraryView(sortOption: currentSortOption, bookCount: items.count)
-                        .appBackground(settings: appSettings, radius: 50)
+                        .appBackground(settings: appSettings, radius: 44)
                 }
             }
             .modifier(TabNavigationTitle(title: title))

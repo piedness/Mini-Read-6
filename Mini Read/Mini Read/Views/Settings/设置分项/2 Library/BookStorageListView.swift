@@ -67,8 +67,6 @@ struct BookStorageListView: View {
                         }
                     } header: {
                         Text("共 \(items.count) 本 · \(totalBytes.storageFormatted)")
-                    } footer: {
-                        Text("「原书」是导入时保留的 EPUB 原件，「内容」是解压后的正文与插图。删除会同时移除这本书的阅读进度。")
                     }
                 }
             }

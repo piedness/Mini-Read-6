@@ -66,13 +66,17 @@ struct PremiumHardcoverModifier: ViewModifier {
                     )
                     .blendMode(.screen)
                 }
+                // 叠加层自己收在圆角里。
+                //
+                // 这一步不能挪到最外层去"统一裁一次"：`.shadow` 之后再 `.clipShape`
+                // 会把影一起裁掉（实测：影区亮度 255，与纯白无差），下面两层影就白写了。
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             }
             // 5. 博物馆展柜级的阴影系统 (Exhibition Shadows)
             // 接触影：极度紧贴，模拟书本本身的绝对重量
             .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 1)
             // 悬浮影：大范围的柔和环境光遮蔽，仿佛书本被放置在柔光灯下
             .shadow(color: .black.opacity(0.15), radius: 15, x: 5, y: 10)
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 

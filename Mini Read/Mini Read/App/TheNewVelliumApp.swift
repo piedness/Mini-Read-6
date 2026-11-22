@@ -77,6 +77,7 @@ struct Mini_ReadApp: App {
             PageProgress.self,
             ReadingSession.self,
             Bookmark.self,
+            ReaderAnnotation.self,
             BookCollection.self
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)

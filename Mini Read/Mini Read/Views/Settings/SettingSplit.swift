@@ -16,8 +16,6 @@ enum SettingsRoute: Hashable, CaseIterable {
     case highlight
     case noteSystem
     case exportShare
-    // 隐私与安全
-    case privacySecurity
     // 系统设置
     case customize
     case general
@@ -39,7 +37,6 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
     case reading = "阅读体验"
     case library = "书库管理"
     case notes = "笔记与标注"
-    case privacy = "隐私与安全"
     case other = "其他"
     
     var id: String { rawValue }
@@ -69,10 +66,6 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
                 SettingsItem(route: .highlight,   label: "高亮与标注", icon: "highlighter",          iconColor: .yellow),
                 SettingsItem(route: .noteSystem,  label: "笔记系统",   icon: "note.text",            iconColor: .orange),
                 SettingsItem(route: .exportShare, label: "导出与分享", icon: "square.and.arrow.up.fill", iconColor: .blue)
-            ]
-        case .privacy:
-            return [
-                SettingsItem(route: .privacySecurity, label: "访问控制与隐私", icon: "lock.fill", iconColor: .blue)
             ]
         case .other:
             return [
@@ -302,7 +295,6 @@ struct SettingsView: View {
         case .highlight:       HighlightSettingsView(settings: appSettings)
         case .noteSystem:      NoteSystemSettingsView(settings: appSettings)
         case .exportShare:     ExportShareSettingsView(settings: appSettings)
-        case .privacySecurity: PrivacySecuritySettingsView(settings: appSettings)
         case .general:         GeneralSettingsView(settings: appSettings)
         case .performance:     PerformanceSettingsView(settings: appSettings)
         case .about:           AboutView()

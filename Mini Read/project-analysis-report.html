@@ -1,0 +1,1337 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Mini Read · 项目全面分析报告</title>
+<style>
+/* ============ tokens ============ */
+:root{
+  --paper:#f4efe4; --paper-2:#ece5d7; --paper-3:#e3dac8;
+  --ink:#211d17; --muted:#6f675a; --faint:#9b9283;
+  --line:#d8cfbe; --line-strong:#c4b9a4;
+  --accent:#b4472f; --accent-2:#2f5d50; --gold:#a97b2f;
+  --ok:#2f6b52; --warn:#a97b2f; --bad:#a33d2d; --risk:#8a4b6b;
+  --card:rgba(255,252,246,.74); --card-solid:#fbf7ee;
+  --code-bg:rgba(33,29,23,.055);
+  --shadow:0 18px 50px rgba(70,55,30,.08);
+  --radius:16px;
+}
+[data-theme="dark"]{
+  --paper:#14130f; --paper-2:#1b1915; --paper-3:#24211b;
+  --ink:#eee7d8; --muted:#a89e8c; --faint:#7c7364;
+  --line:#332f27; --line-strong:#4a4438;
+  --accent:#e0785d; --accent-2:#7fb8a4; --gold:#d2a45c;
+  --ok:#7fc6a4; --warn:#d2a45c; --bad:#e08a76; --risk:#c58aad;
+  --card:rgba(28,26,21,.78); --card-solid:#1c1a15;
+  --code-bg:rgba(238,231,216,.07);
+  --shadow:0 18px 50px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:86px}
+body{
+  margin:0;color:var(--ink);line-height:1.65;
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  background:
+    radial-gradient(1100px 620px at 8% -8%, rgba(180,71,47,.10), transparent 62%),
+    radial-gradient(900px 520px at 96% 2%, rgba(47,93,80,.10), transparent 60%),
+    var(--paper);
+  -webkit-font-smoothing:antialiased;
+}
+body::before{
+  content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.42;
+  background-image:radial-gradient(rgba(80,65,40,.16) .5px, transparent .5px);
+  background-size:5px 5px;
+  mask-image:linear-gradient(to bottom, black, transparent 70%);
+}
+h1,h2,h3,h4,h5,.serif{font-family:"Iowan Old Style","Palatino Linotype","Songti SC","STSong","Noto Serif SC",serif;font-weight:600;letter-spacing:-.012em}
+a{color:var(--accent-2);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.85em;background:var(--code-bg);border:1px solid var(--line);border-radius:5px;padding:.1em .38em;overflow-wrap:anywhere}
+button{font:inherit}
+.wrap{max-width:1180px;margin:0 auto;padding:0 28px}
+.scroll-progress{position:fixed;top:0;left:0;right:0;height:2px;z-index:100;background:transparent}
+.scroll-progress i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent-2),var(--accent));transition:width .1s linear}
+/* ============ topbar ============ */
+.topbar{
+  position:sticky;top:0;z-index:60;display:flex;align-items:center;gap:20px;
+  padding:10px 28px;border-bottom:1px solid var(--line);
+  background:color-mix(in srgb, var(--paper) 82%, transparent);
+  backdrop-filter:blur(18px) saturate(1.2);
+}
+.brand{display:flex;align-items:center;gap:10px;color:var(--ink);font-weight:700;white-space:nowrap}
+.brand:hover{text-decoration:none}
+.brand-mark{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:var(--ink);color:var(--paper);font-family:"Iowan Old Style",serif;font-size:16px}
+.brand em{font-style:normal;color:var(--muted);font-weight:500;font-size:12px;margin-left:4px}
+.nav{display:flex;align-items:center;gap:2px;overflow-x:auto;scrollbar-width:none;flex:1}
+.nav::-webkit-scrollbar{display:none}
+.nav a{color:var(--muted);font-size:12.5px;padding:7px 10px;border-radius:8px;white-space:nowrap}
+.nav a:hover{color:var(--ink);background:var(--paper-2);text-decoration:none}
+.nav a.active{color:var(--ink);background:var(--paper-3);font-weight:600}
+.top-actions{display:flex;align-items:center;gap:6px}
+.icon-btn{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:9px;padding:6px 10px;font-size:12px;cursor:pointer;white-space:nowrap}
+.icon-btn:hover{border-color:var(--line-strong);background:var(--paper-2)}
+/* ============ hero ============ */
+.hero{padding:74px 0 46px;display:grid;grid-template-columns:1.22fr .78fr;gap:44px;align-items:center}
+.eyebrow{font-size:11px;font-weight:800;letter-spacing:.2em;text-transform:uppercase;color:var(--accent)}
+.hero h1{font-size:clamp(56px,8.4vw,100px);line-height:.92;margin:14px 0 20px}
+.hero h1 span{color:var(--accent);font-style:italic}
+.hero-lede{font-size:17.5px;color:var(--muted);max-width:60ch;margin:0}
+.verdict{border-left:3px solid var(--accent);padding:2px 0 2px 18px;margin:24px 0 0;font-size:16px;max-width:64ch}
+.verdict b{color:var(--ink)}
+.hero-meta{display:flex;flex-wrap:wrap;gap:7px;margin-top:22px}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:999px;padding:5px 10px;font-size:11.5px;white-space:nowrap}
+.chip b{color:var(--ink);font-weight:600}
+.hero-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+.btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line-strong);background:var(--card);color:var(--ink);border-radius:10px;padding:9px 14px;font-size:12.5px;cursor:pointer;transition:.18s}
+.btn:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+.btn.primary{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.score-card{position:relative;border:1px solid var(--line);background:var(--card);border-radius:24px;padding:26px 24px 22px;text-align:center;box-shadow:var(--shadow);overflow:hidden}
+.score-card::after{content:"";position:absolute;inset:auto -30% -55% -30%;height:70%;background:radial-gradient(closest-side, rgba(180,71,47,.14), transparent);pointer-events:none}
+.score-ring{width:190px;height:190px;transform:rotate(-90deg);display:block;margin:0 auto}
+.ring-bg{fill:none;stroke:var(--paper-3);stroke-width:9}
+.ring-fg{fill:none;stroke:url(#scoreGradient);stroke-width:9;stroke-linecap:round;stroke-dasharray:326.7;stroke-dashoffset:326.7;transition:stroke-dashoffset 1.5s cubic-bezier(.2,.8,.2,1)}
+.score-num{position:absolute;top:50%;left:50%;transform:translate(-50%,-58%);font-family:"Iowan Old Style",serif;font-size:52px;line-height:1;color:var(--ink)}
+.score-num small{font-size:13px;color:var(--muted);font-family:-apple-system,sans-serif}
+.score-label{margin-top:2px;font-size:12px;color:var(--muted);letter-spacing:.08em}
+.score-split{display:flex;justify-content:center;gap:22px;margin-top:14px;padding-top:14px;border-top:1px dashed var(--line);font-size:12px;color:var(--muted)}
+.score-split b{display:block;font-family:"Iowan Old Style",serif;font-size:21px;color:var(--ink)}
+/* ============ stats ============ */
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:16px;overflow:hidden;margin-bottom:54px}
+.stat{background:var(--paper-2);padding:18px 18px 16px}
+.stat b{display:block;font-family:"Iowan Old Style",serif;font-size:27px;line-height:1.1}
+.stat small{display:block;color:var(--muted);font-size:11.5px;margin-top:4px}
+.stat em{font-style:normal;color:var(--accent);font-size:11px;font-weight:700;letter-spacing:.08em}
+/* ============ sections ============ */
+.section{padding:68px 0;border-top:1px solid var(--line)}
+.section-head{display:grid;grid-template-columns:110px 1fr;gap:24px;margin-bottom:30px}
+.section-num{font-family:"Iowan Old Style",serif;font-size:13px;color:var(--accent);letter-spacing:.12em;padding-top:7px}
+.section h2{font-size:clamp(30px,4vw,44px);line-height:1.08;margin:0 0 10px}
+.section-lede{color:var(--muted);max-width:72ch;margin:0;font-size:15px}
+.grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
+.card h3{font-size:17px;margin:0 0 7px}
+.card p{margin:0;color:var(--muted);font-size:13.8px}
+.card .tag{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:9px}
+.card.good{border-top:3px solid var(--ok)}
+.card.warn{border-top:3px solid var(--warn)}
+.card.bad{border-top:3px solid var(--bad)}
+.card.next{border-top:3px solid var(--accent-2)}
+/* ============ modules ============ */
+.modules{display:grid;grid-template-columns:1fr 1fr;gap:13px 34px;margin-top:20px}
+.module{padding:9px 0 7px;border-bottom:1px dashed var(--line)}
+.module-top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:6px}
+.module-top span{font-size:13.5px}
+.module-top b{font-family:"Iowan Old Style",serif;font-size:16px;color:var(--muted)}
+.bar{height:7px;border-radius:99px;background:var(--paper-3);overflow:hidden}
+.bar i{display:block;height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,var(--accent-2),var(--accent));transition:width 1.2s cubic-bezier(.2,.8,.2,1)}
+.module small{display:block;color:var(--faint);font-size:11.5px;margin-top:5px}
+/* ============ matrix ============ */
+.matrix-toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:var(--card);position:sticky;top:58px;z-index:30;backdrop-filter:blur(14px);box-shadow:0 8px 24px rgba(50,40,20,.05)}
+.search{position:relative;flex:1 1 230px;max-width:340px}
+.search input{width:100%;border:1px solid var(--line);background:var(--paper-2);color:var(--ink);border-radius:9px;padding:8px 11px 8px 32px;font-size:12.5px;outline:none}
+.search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(180,71,47,.12)}
+.search svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:14px;height:14px;stroke:var(--muted);fill:none;stroke-width:1.8}
+.chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chip-btn{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:999px;padding:5px 10px;font-size:11.5px;cursor:pointer;transition:.15s}
+.chip-btn:hover{border-color:var(--line-strong);color:var(--ink)}
+.chip-btn.active{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.chip-btn .n{opacity:.62;margin-left:3px;font-size:10.5px}
+.matrix-count{font-size:12px;color:var(--muted);white-space:nowrap}
+.feature-list{display:flex;flex-direction:column;gap:9px;margin-top:16px}
+.feature{border:1px solid var(--line);border-radius:13px;background:var(--card);overflow:hidden;transition:border-color .18s}
+.feature:hover{border-color:var(--line-strong)}
+.feature-head{width:100%;display:grid;grid-template-columns:9px minmax(0,1fr) 110px 18px;gap:13px;align-items:center;padding:14px 16px;background:none;border:0;text-align:left;color:inherit;cursor:pointer}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+.feature[data-status="done"] .status-dot{background:var(--ok)}
+.feature[data-status="partial"] .status-dot{background:var(--warn)}
+.feature[data-status="missing"] .status-dot{background:var(--bad)}
+.feature[data-status="risk"] .status-dot{background:var(--risk)}
+.feature-title strong{display:block;font-size:14.5px;line-height:1.35}
+.feature-title small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px}
+.mini-bar{height:5px;border-radius:99px;background:var(--paper-3);overflow:hidden}
+.mini-bar i{display:block;height:100%;border-radius:99px;background:var(--accent-2)}
+.feature[data-status="partial"] .mini-bar i{background:var(--warn)}
+.feature[data-status="missing"] .mini-bar i,.feature[data-status="risk"] .mini-bar i{background:var(--bad)}
+.chev{color:var(--muted);font-size:17px;line-height:1;transition:transform .2s;justify-self:end}
+.feature.open .chev{transform:rotate(45deg)}
+.feature-body{display:none;padding:0 16px 18px;border-top:1px dashed var(--line);margin-top:0}
+.feature.open .feature-body{display:block;animation:fade .22s ease}
+.detail-grid{display:grid;grid-template-columns:1.15fr .9fr .95fr;gap:18px;margin-top:14px}
+.detail-grid h5{margin:0 0 5px;font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--accent)}
+.detail-grid p,.detail-grid ul{margin:0;color:var(--muted);font-size:12.8px;line-height:1.6}
+.detail-grid ul{padding:0;list-style:none;display:flex;flex-direction:column;gap:4px}
+.detail-grid code{font-size:11.5px}
+@keyframes fade{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+/* ============ wiring table ============ */
+.table-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin:18px 0 12px}
+.table-wrap{overflow:auto;max-height:620px;border:1px solid var(--line);border-radius:14px;background:var(--card)}
+table{width:100%;border-collapse:collapse;min-width:820px}
+thead th{position:sticky;top:0;z-index:2;text-align:left;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:11px 14px;border-bottom:1px solid var(--line);background:var(--paper-2)}
+td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top;font-size:12.8px;line-height:1.55}
+tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:color-mix(in srgb, var(--paper-3) 55%, transparent)}
+td code{font-size:11.5px}
+.pill{display:inline-flex;align-items:center;border-radius:999px;padding:2px 8px;font-size:10.5px;font-weight:700;white-space:nowrap}
+.pill.dead{background:rgba(163,61,45,.13);color:var(--bad)}
+.pill.ui{background:rgba(169,123,47,.15);color:var(--warn)}
+.pill.partial{background:rgba(47,93,80,.14);color:var(--ok)}
+.pill.wired{background:rgba(47,107,82,.14);color:var(--ok)}
+[data-theme="dark"] .pill.dead{background:rgba(224,138,118,.14)}
+[data-theme="dark"] .pill.ui{background:rgba(210,164,92,.14)}
+[data-theme="dark"] .pill.partial,[data-theme="dark"] .pill.wired{background:rgba(127,198,164,.14)}
+.callout{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--card);border-radius:12px;padding:14px 16px;margin:16px 0;font-size:13.5px;color:var(--muted)}
+.callout b{color:var(--ink)}
+.callout .big{font-family:"Iowan Old Style",serif;font-size:28px;line-height:1;color:var(--accent);white-space:nowrap}
+/* ============ architecture ============ */
+.arch-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:18px}
+.arch-layer{border:1px solid var(--line);border-radius:15px;background:var(--card);padding:12px;position:relative}
+.arch-layer:not(:last-child)::after{content:"→";position:absolute;right:-14px;top:50%;transform:translateY(-50%);color:var(--faint);font-size:16px;z-index:1}
+.arch-layer h4{margin:0 0 10px;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+.node{width:100%;display:block;text-align:left;border:1px solid var(--line);background:var(--paper-2);color:var(--ink);border-radius:9px;padding:8px 10px;margin-bottom:7px;cursor:pointer;transition:.16s}
+.node:last-child{margin-bottom:0}
+.node:hover,.node.active{border-color:var(--accent);background:color-mix(in srgb, var(--accent) 7%, var(--paper-2));transform:translateX(2px)}
+.node b{display:block;font-size:12.2px;font-weight:650;line-height:1.35}
+.node small{display:block;color:var(--muted);font-size:10.5px;margin-top:2px;line-height:1.35}
+.arch-detail{margin-top:16px;border:1px solid #2d2820;border-radius:15px;background:#17150f;color:#eee7d8;padding:20px 22px;min-height:138px}
+.arch-detail h3{margin:0 0 6px;font-size:19px;color:#f4efe4}
+.arch-detail p{margin:0 0 8px;color:#b9ae9b;font-size:13px;line-height:1.65}
+.arch-detail code{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.12);color:#e9dcc4}
+.arch-detail .files{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.arch-detail .files code{font-size:11px}
+.arch-detail .note{border-top:1px dashed rgba(255,255,255,.14);margin-top:10px;padding-top:9px;color:#d2a45c;font-size:12px}
+.arch-empty{color:#8f8575;font-size:13px}
+/* ============ flow ============ */
+.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;list-style:none;padding:0;margin:18px 0 0;counter-reset:step}
+.flow li{position:relative;border:1px solid var(--line);border-radius:12px;background:var(--card);padding:13px 13px 13px 42px;min-height:86px}
+.flow li::before{counter-increment:step;content:counter(step);position:absolute;left:12px;top:13px;width:21px;height:21px;border-radius:50%;background:var(--accent);color:#fff;font-size:10.5px;font-weight:800;display:grid;place-items:center}
+.flow b{display:block;font-size:12.5px;line-height:1.4;margin-bottom:3px}
+.flow small{color:var(--muted);font-size:11px;line-height:1.45;display:block}
+/* ============ roadmap ============ */
+.roadmap-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.roadmap-progress{flex:1;min-width:180px;height:7px;border-radius:99px;background:var(--paper-3);overflow:hidden}
+.roadmap-progress i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent-2),var(--accent));border-radius:99px;transition:width .3s}
+.roadmap-count{font-size:12px;color:var(--muted);white-space:nowrap}
+.roadmap{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.lane{border:1px solid var(--line);border-radius:15px;background:var(--card);padding:16px}
+.lane h3{margin:0 0 2px;font-size:19px}
+.lane .lane-sub{font-size:11px;color:var(--muted);letter-spacing:.06em;margin-bottom:8px}
+.task{display:flex;gap:10px;padding:11px 0;border-top:1px dashed var(--line)}
+.task input{accent-color:var(--accent);margin-top:3px;width:15px;height:15px;flex:none}
+.task label{cursor:pointer;flex:1}
+.task b{display:block;font-size:12.8px;line-height:1.4}
+.task span{display:block;color:var(--muted);font-size:11.5px;line-height:1.5;margin-top:2px}
+.task .meta{display:flex;gap:5px;margin-top:6px}
+.task.done b{text-decoration:line-through;color:var(--faint)}
+.task.done span{opacity:.65}
+.tag-mini{font-size:9.5px;border:1px solid var(--line);border-radius:999px;padding:1px 6px;color:var(--muted);white-space:nowrap}
+.tag-mini.high{color:var(--bad);border-color:color-mix(in srgb, var(--bad) 40%, var(--line))}
+.tag-mini.mid{color:var(--warn);border-color:color-mix(in srgb, var(--warn) 40%, var(--line))}
+.tag-mini.low{color:var(--ok);border-color:color-mix(in srgb, var(--ok) 40%, var(--line))}
+/* ============ risks ============ */
+.risk{border:1px solid var(--line);border-radius:13px;background:var(--card);margin-bottom:9px;overflow:hidden}
+.risk summary{display:flex;align-items:center;gap:11px;padding:14px 16px;cursor:pointer;list-style:none}
+.risk summary::-webkit-details-marker{display:none}
+.risk summary strong{font-size:13.8px;flex:1;line-height:1.4}
+.risk .chev{flex:none}
+.risk[open] .chev{transform:rotate(45deg)}
+.sev{font-size:10px;font-weight:800;letter-spacing:.08em;border-radius:999px;padding:2px 8px;white-space:nowrap}
+.sev.high{background:rgba(163,61,45,.14);color:var(--bad)}
+.sev.mid{background:rgba(169,123,47,.15);color:var(--warn)}
+.sev.low{background:rgba(47,107,82,.14);color:var(--ok)}
+[data-theme="dark"] .sev.high{background:rgba(224,138,118,.14)}
+[data-theme="dark"] .sev.mid{background:rgba(210,164,92,.14)}
+[data-theme="dark"] .sev.low{background:rgba(127,198,164,.14)}
+.risk-body{padding:0 16px 15px;border-top:1px dashed var(--line);color:var(--muted);font-size:12.8px;line-height:1.65}
+.risk-body b{color:var(--ink)}
+.risk-body p{margin:10px 0 0}
+/* ============ verify ============ */
+.verify-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:16px}
+.terminal{background:#17150f;color:#e8e0cf;border:1px solid #2c2820;border-radius:13px;padding:17px 18px;font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.7;overflow:auto}
+.terminal .dim{color:#8f8575}
+.terminal .ok{color:#7fd1a8;font-weight:700}
+.terminal .warn{color:#d2a45c}
+.checklist{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:9px}
+.checklist li{display:flex;gap:10px;align-items:flex-start;font-size:13px;color:var(--muted);line-height:1.55}
+.checklist .mark{flex:none;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:800;margin-top:1px}
+.mark.ok{background:rgba(47,107,82,.15);color:var(--ok)}
+.mark.no{background:rgba(163,61,45,.13);color:var(--bad)}
+.mark.mid{background:rgba(169,123,47,.15);color:var(--warn)}
+.checklist b{color:var(--ink)}
+/* ============ footer ============ */
+.footer{border-top:1px solid var(--line);padding:28px 0 40px;color:var(--muted);font-size:12px}
+.footer-inner{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap}
+.footer b{color:var(--ink);font-family:"Iowan Old Style",serif;font-size:14px}
+.footer-meta{text-align:right;font-size:11px;color:var(--faint)}
+.empty{padding:28px;text-align:center;color:var(--muted);font-size:13px;border:1px dashed var(--line);border-radius:12px}
+/* ============ responsive ============ */
+@media (max-width:1000px){
+  .hero{grid-template-columns:1fr;gap:28px}
+  .score-card{max-width:360px}
+  .stats{grid-template-columns:repeat(3,1fr)}
+  .grid-4{grid-template-columns:repeat(2,1fr)}
+  .arch-grid{grid-template-columns:repeat(2,1fr)}
+  .arch-layer:nth-child(2)::after{display:none}
+  .roadmap{grid-template-columns:1fr}
+  .detail-grid{grid-template-columns:1fr 1fr}
+  .verify-grid{grid-template-columns:1fr}
+}
+@media (max-width:700px){
+  .wrap{padding:0 18px}
+  .topbar{padding:8px 14px;gap:10px}
+  .brand em{display:none}
+  .nav{order:3;flex-basis:100%;padding-bottom:2px}
+  .topbar{flex-wrap:wrap}
+  .hero{padding-top:46px}
+  .hero h1{font-size:54px}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .grid-4,.grid-2,.modules{grid-template-columns:1fr}
+  .section-head{grid-template-columns:1fr;gap:4px}
+  .section-num{padding-top:0}
+  .matrix-toolbar{position:static}
+  .feature-head{grid-template-columns:9px minmax(0,1fr) 18px}
+  .mini-bar{display:none}
+  .detail-grid{grid-template-columns:1fr}
+  .arch-grid{grid-template-columns:1fr}
+  .arch-layer:not(:last-child)::after{content:"↓";right:50%;top:auto;bottom:-16px;transform:translateX(50%)}
+  .flow{grid-template-columns:1fr 1fr}
+  .footer-meta{text-align:left}
+}
+@media (prefers-reduced-motion:reduce){
+  *{scroll-behavior:auto!important;transition-duration:.001ms!important;animation-duration:.001ms!important}
+}
+@media print{
+  .topbar,.matrix-toolbar,.hero-actions,.top-actions,.scroll-progress,.roadmap-head{display:none!important}
+  body{background:#fff;color:#000}
+  body::before{display:none}
+  .section{page-break-inside:avoid;padding:28px 0}
+  .feature-body{display:block!important}
+  .table-wrap{max-height:none;overflow:visible}
+  .arch-detail{background:#fff;color:#000;border-color:#ccc}
+  .arch-detail h3,.arch-detail p,.arch-detail code,.arch-detail .note{color:#000}
+  a{color:#000}
+}
+
+</style>
+</head>
+<body>
+<div class="scroll-progress"><i id="scrollBar"></i></div>
+<header class="topbar">
+  <a class="brand" href="#top"><span class="brand-mark">M</span><span>Mini Read <em>项目审计</em></span></a>
+  <nav class="nav" aria-label="报告章节">
+    <a href="#overview">概览</a>
+    <a href="#matrix">功能矩阵</a>
+    <a href="#architecture">架构</a>
+    <a href="#wiring">设置接线</a>
+    <a href="#roadmap">路线图</a>
+    <a href="#risks">风险</a>
+    <a href="#verify">验证</a>
+  </nav>
+  <div class="top-actions">
+    <button class="icon-btn" id="themeToggle" type="button" aria-label="切换深浅色">◐ 深色</button>
+    <button class="icon-btn" type="button" onclick="window.print()">打印</button>
+  </div>
+</header>
+<main id="top">
+<section class="wrap hero" aria-labelledby="heroTitle">
+  <div>
+    <div class="eyebrow">项目审计 · 2026-11-21 · 工作区快照</div>
+    <h1 id="heroTitle">能读，<span>还没读完</span>。</h1>
+    <p class="hero-lede">Mini Read 已经是一个可以日常使用的 EPUB 阅读器：共享 TextKit 分页、目录锚点、书签、阅读统计和导入去重都做得相当扎实。但它的「周边层」明显跑在核心前面——高亮、笔记、全书搜索、导出几乎还是空壳，设置页里还有一批开关没有接线。</p>
+    <p class="verdict"><b>一句话结论：</b>核心阅读链路约 <b>85 分</b>，周边能力约 <b>45 分</b>，综合 <b>70/100</b>。最值得做的不是再加功能，而是把已经存在的入口真正接上，并补上标注与无障碍这两块阅读器的地基。</p>
+    <div class="hero-meta">
+      <span class="chip"><b>SwiftUI</b> 外壳</span>
+      <span class="chip"><b>UIKit / TextKit</b> 阅读引擎</span>
+      <span class="chip"><b>SwiftData</b> 本地模型</span>
+      <span class="chip"><b>EPUB 2 / 3</b> 导入</span>
+      <span class="chip"><b>iOS 18.6+</b></span>
+      <span class="chip">本地优先 · 无云同步</span>
+    </div>
+    <div class="hero-actions">
+      <a class="btn primary" href="#matrix">查看功能矩阵 →</a>
+      <button class="btn" id="copySummary" type="button">复制审计摘要</button>
+      <a class="btn" href="#roadmap">跳到优先级路线图</a>
+    </div>
+  </div>
+  <aside class="score-card" aria-label="综合完成度 70 分">
+    <svg class="score-ring" viewBox="0 0 120 120" role="img" aria-hidden="true">
+      <defs>
+        <linearGradient id="scoreGradient" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#2f5d50"/>
+          <stop offset="1" stop-color="#b4472f"/>
+        </linearGradient>
+      </defs>
+      <circle class="ring-bg" cx="60" cy="60" r="52"/>
+      <circle class="ring-fg" id="scoreRing" cx="60" cy="60" r="52"/>
+    </svg>
+    <div class="score-num"><span id="scoreNum">0</span><small>/100</small></div>
+    <div class="score-label">综合完成度</div>
+    <div class="score-split">
+      <div><b>85</b>核心阅读</div>
+      <div><b>45</b>周边能力</div>
+      <div><b>0</b>测试 target</div>
+    </div>
+  </aside>
+</section>
+
+<div class="wrap">
+  <div class="stats" aria-label="项目规模">
+    <div class="stat"><em>CODE</em><b data-count="112">0</b><small>Swift 文件</small></div>
+    <div class="stat"><em>LINES</em><b data-count="27117">0</b><small>Swift 代码行</small></div>
+    <div class="stat"><em>TARGET</em><b data-count="1">0</b><small>App target</small></div>
+    <div class="stat"><em>TESTS</em><b data-count="0">0</b><small>测试 target</small></div>
+    <div class="stat"><em>DEPS</em><b data-count="3">0</b><small>SPM 依赖</small></div>
+    <div class="stat"><em>BUILD</em><b style="font-size:19px;padding-top:6px">PASS</b><small>xcodebuild · 2026-11-21</small></div>
+  </div>
+</div>
+
+<section class="section wrap" id="overview">
+  <div class="section-head">
+    <div class="section-num">01 / OVERVIEW</div>
+    <div>
+      <h2>先给结论</h2>
+      <p class="section-lede">这是一个「核心做得比外壳好」的项目。阅读器主链路有清晰的架构收口和大量踩坑注释；真正的问题集中在功能闭环、设置接线和可访问性，而不是分页算法本身。</p>
+    </div>
+  </div>
+
+  <div class="grid-4">
+    <article class="card good">
+      <span class="tag">做得好的</span>
+      <h3>阅读引擎有工程厚度</h3>
+      <p>共享 NSTextStorage / NSLayoutManager、跨页首行缩进、稳定摘要缓存、LRU pin 当前章、首屏后全书页码索引——这些都不是 Demo 级实现。</p>
+    </article>
+    <article class="card warn">
+      <span class="tag">明显短板</span>
+      <h3>「看起来有」的功能很多</h3>
+      <p>高亮回调从未被调用，笔记页签被刻意拿掉，导出/分享只有开关，全书搜索不存在；设置页还有 30+ 个字段没有消费者。</p>
+    </article>
+    <article class="card bad">
+      <span class="tag">最大风险</span>
+      <h3>标注与路径会咬人</h3>
+      <p>标注直接改共享 NSTextStorage 且不持久化；书籍存绝对 URL；正文没有 VoiceOver 元素。三者都触及阅读器的地基。</p>
+    </article>
+    <article class="card next">
+      <span class="tag">建议顺序</span>
+      <h3>先闭环，再扩展</h3>
+      <p>P0 修标注、路径、无障碍与测试；P1 做全书搜索、笔记 UI、设置清理；P2 再补导出、本地化、诊断与 CSS 子集。</p>
+    </article>
+  </div>
+
+  <div class="callout">
+    <div class="big">3</div>
+    <div><b>如果只做三件事：</b>① 把标注做成可持久化的真功能（模型 + 菜单 + 绘制 + 设置消费）；② 把书籍路径改成相对路径并迁移；③ 给正文补 VoiceOver 与 iPhone 选择。三件都做完，这个 App 的「完成度」会比再加十个设置页更明显。</div>
+  </div>
+
+  <h3 class="serif" style="font-size:22px;margin:28px 0 4px">模块完成度</h3>
+  <p style="margin:0;color:var(--muted);font-size:13px">分数是「功能闭环 + 代码证据 + 边界情况」的综合判断，不是代码量比例。</p>
+  <div class="modules">
+    <div class="module"><div class="module-top"><span>EPUB 解析与导入</span><b>82</b></div><div class="bar"><i data-score="82"></i></div><small>导入/去重/OPF/目录很强；CSS 与复杂版式弱。</small></div>
+    <div class="module"><div class="module-top"><span>排版与分页</span><b>88</b></div><div class="bar"><i data-score="88"></i></div><small>共享 TextKit + 稳定摘要 + 磁盘缓存，核心资产。</small></div>
+    <div class="module"><div class="module-top"><span>阅读交互与翻页</span><b>78</b></div><div class="bar"><i data-score="78"></i></div><small>卷曲/滑动/音量键可用；样式偏少，iPad 强制卷曲。</small></div>
+    <div class="module"><div class="module-top"><span>阅读位置与进度</span><b>72</b></div><div class="bar"><i data-score="72"></i></div><small>页码/锚点/旋转恢复都有；路径与粒度是短板。</small></div>
+    <div class="module"><div class="module-top"><span>主题与字体</span><b>82</b></div><div class="bar"><i data-score="82"></i></div><small>纸面/图片/自定义字体可用；旧主题字段未接。</small></div>
+    <div class="module"><div class="module-top"><span>目录与书签</span><b>90</b></div><div class="bar"><i data-score="90"></i></div><small>nav/NCX/spine、fragment 锚点、书签页签完整。</small></div>
+    <div class="module"><div class="module-top"><span>高亮 / 笔记 / 导出</span><b>18</b></div><div class="bar"><i data-score="18"></i></div><small>只有骨架与设置 UI，没有闭环。</small></div>
+    <div class="module"><div class="module-top"><span>书库与首页</span><b>82</b></div><div class="bar"><i data-score="82"></i></div><small>网格/排序/书单/最近/统计完整；列表模式未接。</small></div>
+    <div class="module"><div class="module-top"><span>搜索</span><b>25</b></div><div class="bar"><i data-score="25"></i></div><small>只有书名/作者/出版社；没有正文搜索。</small></div>
+    <div class="module"><div class="module-top"><span>设置系统</span><b>62</b></div><div class="bar"><i data-score="62"></i></div><small>路由/配置档案完整；字段接线率低。</small></div>
+    <div class="module"><div class="module-top"><span>阅读统计</span><b>88</b></div><div class="bar"><i data-score="88"></i></div><small>纯函数聚合、跨午夜切分、热力图，质量高。</small></div>
+    <div class="module"><div class="module-top"><span>本地化 / Accessibility</span><b>38</b></div><div class="bar"><i data-score="38"></i></div><small>目录有标签；正文无 VoiceOver，无本地化资源。</small></div>
+    <div class="module"><div class="module-top"><span>工程质量 / 测试</span><b>45</b></div><div class="bar"><i data-score="45"></i></div><small>注释与收口优秀；0 测试 target，无 CI。</small></div>
+  </div>
+
+  <div class="callout" style="margin-top:24px">
+    <div class="big" style="font-size:22px">范围</div>
+    <div><b>审计范围与限制：</b>静态阅读 112 个 Swift 文件与关键设置页；用 grep 统计字段消费者；用 xcodebuild 验证编译；未做真机性能采样、未做 App Store 审核预检、未验证每一本真实 EPUB。行号以当前工作区快照为准。云同步是产品明确未承诺的能力，不计入缺陷。</div>
+  </div>
+</section>
+
+<section class="section wrap" id="matrix">
+  <div class="section-head">
+    <div class="section-num">02 / MATRIX</div>
+    <div>
+      <h2>功能矩阵</h2>
+      <p class="section-lede">按「已完成 / 部分完成 / 未实现 / 风险」分级。点击任意一行展开代码证据、缺口与建议。搜索和筛选会即时更新。</p>
+    </div>
+  </div>
+
+  <div class="matrix-toolbar">
+    <div class="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="featureSearch" type="search" placeholder="搜索功能、文件、关键词…" aria-label="搜索功能">
+    </div>
+    <div class="chips" id="statusChips" aria-label="按状态筛选">
+      <button class="chip-btn active" data-status="all" type="button">全部 <span class="n"></span></button>
+      <button class="chip-btn" data-status="done" type="button">已完成 <span class="n"></span></button>
+      <button class="chip-btn" data-status="partial" type="button">部分完成 <span class="n"></span></button>
+      <button class="chip-btn" data-status="missing" type="button">未实现 <span class="n"></span></button>
+      <button class="chip-btn" data-status="risk" type="button">风险 <span class="n"></span></button>
+    </div>
+    <div class="matrix-count" id="featureCount" aria-live="polite">—</div>
+  </div>
+
+  <div class="chips" id="areaChips" style="margin-top:10px" aria-label="按模块筛选">
+    <button class="chip-btn active" data-area="all" type="button">全部模块</button>
+    <button class="chip-btn" data-area="EPUB" type="button">EPUB / 导入</button>
+    <button class="chip-btn" data-area="阅读器" type="button">阅读器</button>
+    <button class="chip-btn" data-area="书库" type="button">书库 / 首页</button>
+    <button class="chip-btn" data-area="设置" type="button">设置</button>
+    <button class="chip-btn" data-area="笔记" type="button">笔记 / 搜索</button>
+    <button class="chip-btn" data-area="系统" type="button">系统 / 工程</button>
+  </div>
+
+  <div class="feature-list" id="featureList"></div>
+</section>
+
+<section class="section wrap" id="architecture">
+  <div class="section-head">
+    <div class="section-num">03 / ARCHITECTURE</div>
+    <div>
+      <h2>架构与数据流</h2>
+      <p class="section-lede">SwiftUI 负责外壳与设置，UIKit/TextKit 负责阅读与分页，SwiftData 负责本地状态。点击任意模块查看职责、关键文件与观察。</p>
+    </div>
+  </div>
+
+  <div class="arch-grid" id="archGrid"></div>
+  <div class="arch-detail" id="archDetail" aria-live="polite">
+    <div class="arch-empty">点击上方任一模块，查看它在链路中的职责与关键文件。</div>
+  </div>
+
+  <h3 class="serif" style="font-size:22px;margin:30px 0 0">打开一本书的 8 步</h3>
+  <p style="margin:4px 0 0;color:var(--muted);font-size:13px">这条链路是当前工程最值得保留的部分：解析、排版、缓存、上屏各自有明确边界。</p>
+  <ol class="flow">
+    <li><b>书库点击</b><small>BookContentView 接收 bookItem，建立阅读会话。</small></li>
+    <li><b>目录加载</b><small>ContentsPanelViewModel.loadEPUBAsync 解析 EPUB。</small></li>
+    <li><b>阅读顺序</b><small>EPUBBook + EPUBNavigation → allSrcs / titleBySrc / anchors。</small></li>
+    <li><b>阅读器外壳</b><small>PageViewControllerRepresentable 创建 ViewController。</small></li>
+    <li><b>按章加载</b><small>loadChapterAsync 先查 PaginationCache，再后台排版。</small></li>
+    <li><b>解析与排版</b><small>ChapterRender：HTML → blocks → NSAttributedString → ChapterLayout。</small></li>
+    <li><b>缓存与建页</b><small>PaginationCache 落盘；ChapterLRUCache pin 当前章。</small></li>
+    <li><b>上屏与回写</b><small>TextVC / TextRenderView 绘制；reportVisibleLocation 回写进度与书签。</small></li>
+  </ol>
+
+  <h3 class="serif" style="font-size:22px;margin:30px 0 4px">四个值得保留的设计决策</h3>
+  <div class="grid-4" style="margin-top:14px">
+    <article class="card"><span class="tag">01</span><h3>共享 TextKit</h3><p>一个 NSTextStorage + 一个 NSLayoutManager 挂多个 container，段落首行缩进和跨页选中在整章范围内一次判定。</p></article>
+    <article class="card"><span class="tag">02</span><h3>稳定摘要</h3><p>PaginationConfig.stableDigest 用 SHA-256 而不是 hashValue，跨进程缓存键才真正命中。</p></article>
+    <article class="card"><span class="tag">03</span><h3>LRU pin 当前章</h3><p>淘汰永远跳过正在上屏的章，避免 VC 被回收后手势、进度、书签静默失效。</p></article>
+    <article class="card"><span class="tag">04</span><h3>首屏优先</h3><p>全书页码索引等第一页真正上屏后才启动，并带 0.35s 合并窗，不让首屏和索引抢主线程。</p></article>
+  </div>
+</section>
+
+<section class="section wrap" id="wiring">
+  <div class="section-head">
+    <div class="section-num">04 / WIRING</div>
+    <div>
+      <h2>设置接线审计</h2>
+      <p class="section-lede">设置页看起来非常完整，但「有开关」不等于「有行为」。下面把 AppSettings 的字段按消费者分成四类：零消费、仅 UI、部分接线、已接线。</p>
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="big">31</div>
+    <div><b>组字段逐项核对。</b>8 组零消费（11 个字段）、13 组纯 UI（19 个字段）、3 组只在设置页内生效（5 个字段：缓存上限、自动清理、3 个暗色背景变体）、7 组已接线。阅读器真正消费的字段约 20 个。</div>
+  </div>
+
+  <div class="table-toolbar">
+    <div class="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="wiringSearch" type="search" placeholder="搜索字段或模块…" aria-label="搜索设置字段">
+    </div>
+    <div class="chips" id="wiringChips" aria-label="按接线状态筛选">
+      <button class="chip-btn active" data-wiring="all" type="button">全部</button>
+      <button class="chip-btn" data-wiring="dead" type="button">零消费</button>
+      <button class="chip-btn" data-wiring="ui" type="button">仅 UI</button>
+      <button class="chip-btn" data-wiring="partial" type="button">部分接线</button>
+      <button class="chip-btn" data-wiring="wired" type="button">已接线</button>
+    </div>
+    <div class="matrix-count" id="wiringCount" aria-live="polite">—</div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th style="width:24%">字段</th><th style="width:10%">模块</th><th style="width:10%">状态</th><th>影响与证据</th></tr></thead>
+      <tbody id="wiringBody"></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="section wrap" id="roadmap">
+  <div class="section-head">
+    <div class="section-num">05 / ROADMAP</div>
+    <div>
+      <h2>优先级路线图</h2>
+      <p class="section-lede">按「用户可感知的闭环」排序，而不是按代码量。P0 是阅读器地基，P1 是把已有入口接上，P2 才是扩展。勾选任务可保存到本地。</p>
+    </div>
+  </div>
+
+  <div class="roadmap-head">
+    <div class="roadmap-progress"><i id="roadmapProgress"></i></div>
+    <div class="roadmap-count" id="roadmapCount">0 / 0 已完成</div>
+    <button class="btn" id="resetRoadmap" type="button">重置勾选</button>
+  </div>
+
+  <div class="roadmap" id="roadmapLanes"></div>
+</section>
+
+<section class="section wrap" id="risks">
+  <div class="section-head">
+    <div class="section-num">06 / RISKS</div>
+    <div>
+      <h2>已知风险与回归点</h2>
+      <p class="section-lede">这些不是「代码风格」问题，而是会在真实用户、真实书籍或系统升级时暴露出来的问题。按严重度排序。</p>
+    </div>
+  </div>
+
+  <details class="risk" open>
+    <summary><span class="sev high">高</span><strong>标注直接修改共享 NSTextStorage，且没有持久化</strong><span class="chev">+</span></summary>
+    <div class="risk-body"><p><b>证据：</b><code>TextVC.swift:322-342</code> 的 applyHighlight / applyUnderline 直接对 chapterLayout.textStorage 加属性；<code>TextRenderView.swift:28-31</code> 的回调从未被任何代码调用。</p><p><b>影响：</b>高亮无法跨页/跨章/跨启动保留；修改共享 storage 可能触发布局失效和页码漂移；没有撤销；设置里的颜色/透明度完全不生效。</p><p><b>建议：</b>建立 Annotation 模型（bookKey、src、字符范围、原文、颜色、样式、笔记），绘制时用 temporary attributes 或独立 overlay，不改底层分页文本。</p></div>
+  </details>
+
+  <details class="risk">
+    <summary><span class="sev high">高</span><strong>书籍路径以绝对 URL 持久化</strong><span class="chev">+</span></summary>
+    <div class="risk-body"><p><b>证据：</b><code>BookModel.swift:14-16</code> 直接存 bookExtrSubdir / bookBackupdir / resourceBaseURL 三个 URL。</p><p><b>影响：</b>App 重装、容器迁移、备份恢复后沙盒路径变化，书架记录还在但文件打不开；书签/进度用 lastPathComponent 做 key，也会跟着错位。</p><p><b>建议：</b>只存相对 Documents 的路径；打开时用当前容器拼绝对 URL；加一次启动自愈迁移。</p></div>
+  </details>
+
+  <details class="risk">
+    <summary><span class="sev high">高</span><strong>正文没有 VoiceOver 可访问元素</strong><span class="chev">+</span></summary>
+    <div class="risk-body"><p><b>证据：</b><code>TextRenderView.swift</code> 是纯绘制视图，没有 isAccessibilityElement / accessibilityElements；<code>TextVC.swift:99-109</code> 只给页码和章节标题加了标签。</p><p><b>影响：</b>VoiceOver 用户能听到「第 12 页」「章节：第一章」，但读不到正文——对阅读 App 是核心功能缺失。</p><p><b>建议：</b>按页/段生成 accessibility elements，提供「朗读当前页」「下一段」等自定义动作；至少先让当前页正文可被逐段朗读。</p></div>
+  </details>
+
+  <details class="risk">
+    <summary><span class="sev high">高</span><strong>0 测试 target，核心逻辑没有回归网</strong><span class="chev">+</span></summary>
+    <div class="risk-body"><p><b>证据：</b><code>xcodebuild -list</code> 只列出 Mini Read 一个 target / scheme；工程无 Tests 目录。</p><p><b>影响：</b>ChapterHTMLParser、PaginationConfig.stableDigest、ReadingStatsEngine、进度口径都是可测纯函数，却没有一条断言；每次改分页/缓存都可能静默回归。</p><p><b>建议：</b>先加 MiniReadTests，覆盖解析块模型、摘要稳定性、跨午夜统计、进度分母、锚点换算。成本低，收益最高。</p></div>
+  </details>
+
+  <details class="risk">
+    <summary><span class="sev mid">中</span><strong>全书页码索引可能造成首开性能尖峰</strong><span class="chev">+</span></summary>
+    <div class="risk-body"><p><b>证据：</b><code>MainViewController.swift:1593-1644</code> 在首屏后逐章排版全书算页数；每章都要走完整 TextKit 排版。</p><p><b>影响：</b>大书/多图 EPUB 首开可能 CPU 飙高、内存上涨、翻页掉帧；目前没有进度反馈或取消入口。</p><p><b>建议：</b>限制并发、加可取消的索引任务与进度提示；或只索引当前章 + 用字符数估算全书页数。</p></div>
+  </details>
+
+  <details class="risk">
+    <summary><span class="sev mid">中</span><strong>设置字段漂移，用户会以为功能已生效</strong><span class="chev">+</span></summary>
+    <div class="risk-body"><p><b>证据：</b>30+ 个字段没有真正影响阅读体验，例如 <code>defaultHighlightColor</code>、<code>libraryViewMode</code>、<code>preloadPages</code>、<code>appLanguage</code>、<code>dateFormat</code>；SettingsProfile 还会把这些值一起导入导出。</p><p><b>影响：</b>用户改设置没有任何变化，或换配置文件后以为阅读行为变了；设置页越完整，信任损耗越大。</p><p><b>建议：</b>每个字段做「消费者或删除」二选一；短期可在未接线的设置项上加「即将支持」标记，长期清理 profile 字段。</p></div>
+  </details>
+
+  <details class="risk">
+    <summary><span class="sev mid">中</span><strong>单文件 EPUB 的进度粒度只有 0/1</strong><span class="chev">+</span></summary>
+    <div class="risk-body"><p><b>证据：</b><code>ContentsPanelModel.swift:292-298</code> 用 allSrcs.count 做分母；<code>BookModel.swift:103-109</code> 用已读 src 数做分子。单文件多锚点 EPUB 只有一个 src。</p><p><b>影响：</b>打开即 100%，书架无法反映书内位置；多文件书按章跳变，长章内也不平滑。</p><p><b>建议：</b>在章进度之上加页/字符偏移的二级进度；书架可显示「第 3 章 · 42%」。</p></div>
+  </details>
+
+  <details class="risk">
+    <summary><span class="sev mid">中</span><strong>无本地化资源，界面中英混排</strong><span class="chev">+</span></summary>
+    <div class="risk-body"><p><b>证据：</b>工程无 .xcstrings / .lproj；<code>TabScreens.swift:219-243</code> 使用 “Search your library / Find books by title…” 等英文文案；appLanguage 字段无消费者。</p><p><b>影响：</b>中文用户看到中英混排；切换语言设置无效；日期格式也不受控。</p><p><b>建议：</b>先建 String Catalog，把阅读器、书库、设置三块文案收口；再接 appLanguage 与 dateFormat。</p></div>
+  </details>
+
+  <details class="risk">
+    <summary><span class="sev mid">中</span><strong>图片与分页缓存没有字节级上限</strong><span class="chev">+</span></summary>
+    <div class="risk-body"><p><b>证据：</b>图片以 NSTextAttachment 进入整章富文本并写入 PaginationCache；<code>ChapterLRUCache.swift:13-27</code> 只按章数（5）限制；preloadPages / imageCacheQuality 未消费。</p><p><b>影响：</b>漫画/画册类 EPUB 可能一张图就占几十 MB；LRU 按章数而不是字节数，内存峰值不可控。</p><p><b>建议：</b>解码按屏宽下采样；缓存按字节限额；把 imageCacheQuality 真正接进 ChapterTypography。</p></div>
+  </details>
+
+  <details class="risk">
+    <summary><span class="sev low">低</span><strong>iPad 强制卷曲，Reduce Motion 强制滑动</strong><span class="chev">+</span></summary>
+    <div class="risk-body"><p><b>证据：</b><code>MainViewController.swift:1802-1836</code> 的 resolvedTurnStyle；翻页设置页 footer 也明确写了这条规则。</p><p><b>影响：</b>用户偏好被覆盖；slide 实际是 UIPageViewController.scroll，不是 Apple Books 的离散滑动。</p><p><b>建议：</b>把「无障碍降级」与「设备形态」作为默认值而不是硬覆盖；补一个真正的离散滑动样式。</p></div>
+  </details>
+</section>
+
+<section class="section wrap" id="verify">
+  <div class="section-head">
+    <div class="section-num">07 / VERIFY</div>
+    <div>
+      <h2>验证与边界</h2>
+      <p class="section-lede">本次只做审计与报告，没有修改任何 Swift 文件。编译验证通过；工程没有测试 target，因此没有单元测试可跑。</p>
+    </div>
+  </div>
+
+  <div class="verify-grid">
+    <div>
+      <div class="terminal" aria-label="构建日志摘要">
+        <div class="dim">$ xcodebuild -list -project "Mini Read.xcodeproj"</div>
+        <div>Targets: <span class="ok">Mini Read</span> &nbsp; Schemes: <span class="ok">Mini Read</span></div>
+        <div class="dim">（没有 test target）</div>
+        <br>
+        <div class="dim">$ xcodebuild -project "Mini Read.xcodeproj" -scheme "Mini Read" \</div>
+        <div class="dim">&nbsp;&nbsp;-configuration Debug -destination 'generic/platform=iOS Simulator' \</div>
+        <div class="dim">&nbsp;&nbsp;-derivedDataPath /tmp/MiniReadDerived CODE_SIGNING_ALLOWED=NO build</div>
+        <br>
+        <div>SDK: iPhoneSimulator26.5.sdk &nbsp; Deployment: iOS 18.6</div>
+        <div>Architectures: arm64 + x86_64</div>
+        <div>Link / CopySwiftLibs / Validate ... done</div>
+        <div class="ok">** BUILD SUCCEEDED **</div>
+        <div class="dim">2026-11-21 23:53</div>
+      </div>
+      <p style="font-size:11.5px;color:var(--faint);margin:8px 2px 0">构建产物在临时 DerivedData，未写入工程目录；未做代码签名。</p>
+    </div>
+
+    <div>
+      <ul class="checklist">
+        <li><span class="mark ok">✓</span><div><b>编译通过</b><br>Debug / iOS Simulator，arm64 + x86_64，CODE_SIGNING_ALLOWED=NO。</div></li>
+        <li><span class="mark no">!</span><div><b>没有测试 target</b><br>工程只有 Mini Read 一个 target；本次未运行单元测试，因为不存在。</div></li>
+        <li><span class="mark ok">✓</span><div><b>没有改动 Swift 代码</b><br>只新增了本报告 HTML；现有行为、工程文件、资源均未修改。</div></li>
+        <li><span class="mark ok">✓</span><div><b>报告可离线打开</b><br>单文件 HTML，无外部字体/脚本/网络请求；交互在浏览器中验证。</div></li>
+        <li><span class="mark mid">…</span><div><b>未做的验证</b><br>真机性能采样、App Store 审核预检、真实 EPUB 语料回归、VoiceOver 实机走查。</div></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout" style="margin-top:24px">
+    <div class="big" style="font-size:22px">结论</div>
+    <div><b>Mini Read 的问题不是「不会做阅读器」，而是「做了一半的功能太多」。</b>分页、目录、书签、统计已经具备产品级骨架；下一步应该把标注、搜索、设置接线和可访问性做成真正的闭环，再用测试把这条链路锁住。这样比继续增加设置页或动画样式更能提升完成度。</div>
+  </div>
+
+  <h3 class="serif" style="font-size:20px;margin:26px 0 8px">审计方法</h3>
+  <div class="grid-4">
+    <article class="card"><span class="tag">STEP 1</span><h3>静态阅读</h3><p>逐文件阅读阅读器、解析、设置、书库、统计与导入链路，记录函数级职责与边界。</p></article>
+    <article class="card"><span class="tag">STEP 2</span><h3>消费者扫描</h3><p>提取 AppSettings 字段，用 grep 统计设置模块之外的消费者，区分零消费/仅 UI/已接线。</p></article>
+    <article class="card"><span class="tag">STEP 3</span><h3>编译验证</h3><p>用 xcodebuild 构建 iOS Simulator 版本，确认当前快照可编译，并确认没有测试 target。</p></article>
+    <article class="card"><span class="tag">STEP 4</span><h3>报告验证</h3><p>在浏览器中打开单文件报告，检查筛选、搜索、展开、架构节点、路线图勾选与深浅色。</p></article>
+  </div>
+</section>
+
+</main>
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <div><b>Mini Read · 项目全面分析报告</b><br><span>基于 2026-11-21 工作区快照的静态审计；未修改任何 Swift 代码。</span></div>
+    <div class="footer-meta">112 Swift 文件 · 27,117 行 · iOS 18.6+ · SwiftData · TextKit</div>
+  </div>
+</footer>
+<script>
+const features = [
+  {id:'epub-import', title:'EPUB 导入与去重', area:'EPUB', status:'done', score:95,
+   summary:'导入链路是工程里最扎实的一段：SHA-256 内容去重、专用串行队列、唯一目录名、结构化错误，失败原因能回到 UI。',
+   evidence:['Mini Read/Services/FileFunctions/epubImpoter.swift:14-23（契约注释）','Mini Read/Services/FileFunctions/epubImpoter.swift:33-36（路径常量）','Mini Read/Services/FileFunctions/epubImpoter.swift:191（元数据回填）'],
+   gap:'没有明显缺口。',
+   next:'补一条「重复导入 / 损坏 EPUB / 中途取消」的回归用例即可。'},
+  {id:'opf', title:'OPF 元数据与封面', area:'EPUB', status:'done', score:90,
+   summary:'Kanna + OPF 解析标题、作者、出版社、语言、标识符与封面；书库元数据编辑器已经接上。',
+   evidence:['Mini Read/Services/parseFunctions/OPF/OPFMetadata.swift:12-32','Mini Read/Services/parseFunctions/epubParser.swift:11-28'],
+   gap:'系列、译者、出版日期等字段未展示。',
+   next:'元数据编辑器补系列/译者；书架可按系列聚合。'},
+  {id:'toc', title:'目录解析 nav / NCX / spine', area:'EPUB', status:'done', score:92,
+   summary:'nav → NCX → spine 三级兜底；fragment 锚点保留，目录项可以落到小节而不是章首。',
+   evidence:['Mini Read/Services/parseFunctions/EPUBNavigation.swift','Mini Read/View Model/ContentsPanelModel.swift:280-298'],
+   gap:'复杂嵌套目录的折叠/展开体验还可打磨。',
+   next:'保持现状；补坏书/缺 nav/缺 NCX 的解析测试。'},
+  {id:'html', title:'正文结构化解析', area:'EPUB', status:'partial', score:80,
+   summary:'Kanna HTML 容错解析，产出 heading / paragraph / quote / listItem / image / separator 六类块与目录锚点。',
+   evidence:['Mini Read/Services/TextPagelization/ChapterHTMLParser.swift:40-53（块模型）','Mini Read/Services/TextPagelization/ChapterHTMLParser.swift:165-190（标签分派）','Mini Read/Services/TextPagelization/ChapterHTMLParser.swift:14-21（设计约束）'],
+   gap:'表格、ruby、脚注、SVG、MathML、CSS class/style 未进入块模型。',
+   next:'先补 table / footnote 两类，覆盖技术书与学术书；其余保持降级。'},
+  {id:'css', title:'CSS / 复杂版式还原', area:'EPUB', status:'missing', score:15,
+   summary:'没有 CSS 解析器；标题、引用、列表样式由 ChapterTypography 硬编码，出版商的样式基本不生效。',
+   evidence:['Mini Read/Services/TextPagelization/ChapterTypography.swift:169-260','Mini Read/Services/TextPagelization/ChapterHTMLParser.swift:255（style 被过滤）'],
+   gap:'自定义字体、缩进、颜色、分栏、图片环绕、首字下沉都不会生效。',
+   next:'做 CSS 子集（font-style/weight、text-align、margin、color、background），不要追求全量。'},
+  {id:'images', title:'内嵌图片', area:'EPUB', status:'partial', score:72,
+   summary:'图片以 NSTextAttachment 进入整章富文本，解码失败/文件缺失时降级为文字占位，不丢内容线索。',
+   evidence:['Mini Read/Services/TextPagelization/ChapterTypography.swift:16-17','Mini Read/Services/TextPagelization/ChapterHTMLParser.swift:190'],
+   gap:'没有按屏宽下采样；大图直接进分页缓存；imageCacheQuality 设置未消费。',
+   next:'解码时下采样；把 imageCacheQuality 接进 ChapterTypography；缓存按字节限流。'},
+  {id:'progress-denominator', title:'进度口径与粒度', area:'EPUB', status:'partial', score:65,
+   summary:'分母用 spine 文件数（allSrcs.count），目录重复项不会撑大；但单文件多锚点 EPUB 只有 0/1 粒度。',
+   evidence:['Mini Read/View Model/ContentsPanelModel.swift:292-298','Mini Read/Models/UserDataModel/BookModel.swift:103-109'],
+   gap:'单文件书打开即 100%，无法反映书内位置；多文件书按章跳变。',
+   next:'用字符偏移/全书页数做二级进度，书架显示「章 + 页」。'},
+  {id:'paths', title:'书籍路径稳定性', area:'系统', status:'risk', score:40,
+   summary:'bookItem 直接持久化绝对 URL；重装、换容器或备份恢复后，书架记录还在但文件可能打不开。',
+   evidence:['Mini Read/Models/UserDataModel/BookModel.swift:14-16','Mini Read/View Model/ContentsPanelModel.swift:193（用 lastPathComponent 做 session key）'],
+   gap:'没有相对路径解析、迁移或启动自愈。',
+   next:'存相对 Documents 的路径；打开时拼当前容器；加一次迁移与自愈。'},
+  {id:'layout', title:'章节排版与分页', area:'阅读器', status:'done', score:92,
+   summary:'共享 NSTextStorage + NSLayoutManager + 多 NSTextContainer；首行缩进跨页正确；配置摘要跨进程稳定。',
+   evidence:['Mini Read/Services/TextPagelization/ChapterLayout.swift:14-31','Mini Read/Services/TextPagelization/ChapterTypography.swift:26-76','Mini Read/Services/TextPagelization/ChapterRender.swift:21-32'],
+   gap:'没有明显缺口。',
+   next:'保持；补长章、大图、超长段落的压力测试。'},
+  {id:'index', title:'全书页码索引', area:'阅读器', status:'done', score:85,
+   summary:'首屏后延迟 0.35s 启动，逐章排版算页数；首屏前的索引请求会排队，不抢首帧。',
+   evidence:['Mini Read/Views/BookContentUI/UIkit Composer/PVC/MainViewController.swift:1593-1644','Mini Read/Views/BookContentUI/UIkit Composer/PVC/MainViewController.swift:1616','Mini Read/Views/BookContentUI/UIkit Composer/PVC/MainViewController.swift:1633'],
+   gap:'大书首开可能 CPU/内存尖峰；没有进度反馈或取消入口。',
+   next:'限制并发、加进度提示；或只索引当前章 + 估算全书。'},
+  {id:'prefetch', title:'预取与 LRU', area:'阅读器', status:'done', score:86,
+   summary:'前后各 1 章 + 后 2 章预取；LRU 5 章并 pin 当前章；分页结果落磁盘缓存。',
+   evidence:['Mini Read/Views/BookContentUI/UIkit Composer/PVC/MainViewController.swift:1582-1591','Mini Read/Views/BookContentUI/UIkit Composer/PVC/ChapterLRUCache.swift:13-27','Mini Read/Views/BookContentUI/UIkit Composer/PVC/PaginationCache.swift'],
+   gap:'preloadPages 设置未接；图片附件让缓存体积不可控。',
+   next:'把 preloadPages 映射到预取窗口；缓存按字节限流。'},
+  {id:'pageturn', title:'翻页动画', area:'阅读器', status:'partial', score:75,
+   summary:'支持仿真卷曲与连续滑动；Reduce Motion 自动滑动；iPad 双页固定卷曲。',
+   evidence:['Mini Read/Views/BookContentUI/PageTurnStyle.swift','Mini Read/Views/BookContentUI/UIkit Composer/PVC/MainViewController.swift:1802-1836'],
+   gap:'slide 实际是 UIPageViewController.scroll，不是 Apple Books 的离散滑动；样式只有两种。',
+   next:'补真正的离散滑动，或明确产品只保留两种并写清差异。'},
+  {id:'location', title:'阅读位置与进度', area:'阅读器', status:'partial', score:72,
+   summary:'页码进度、lastReadSrc、旋转锚点、书签锚点都已接；可见页变化会回写 SwiftData。',
+   evidence:['Mini Read/Views/BookContentUI/UIkit Composer/PVC/MainViewController.swift:1738-1760','Mini Read/Views/BookContentUI/UIkit Composer/PVC/MainViewController.swift:293-303','Mini Read/Views/BookContentUI/BookContent.swift'],
+   gap:'绝对路径；无跨设备；单文件书粒度粗。',
+   next:'与路径修复一起做；进度改为「章 + 页 + 字符偏移」。'},
+  {id:'chrome', title:'页码 / 章节标题', area:'阅读器', status:'done', score:90,
+   summary:'页码与标题独立显示，位置/格式可配，页码支持整书/本章两种口径。',
+   evidence:['Mini Read/Views/BookContentUI/UIkit Composer/UITextVC/TextVC.swift:86-110','Mini Read/Views/BookContentUI/ReaderChrome.swift','Mini Read/Models/SettingsModels/SettingModel.swift:55-62'],
+   gap:'没有明显缺口。',
+   next:'保持；可补「隐藏页码时仍保留进度条」的选项。'},
+  {id:'volume', title:'音量键翻页', area:'阅读器', status:'done', score:85,
+   summary:'音量键 pager，受设置开关控制；重建页面/设置变更时会同步启用状态。',
+   evidence:['Mini Read/Views/BookContentUI/UIkit Composer/PVC/MainViewController.swift:165','Mini Read/Views/BookContentUI/UIkit Composer/PVC/MainViewController.swift:417-429','Mini Read/Views/BookContentUI/UIkit Composer/PVC/MainViewController.swift:1013'],
+   gap:'没有明显缺口。',
+   next:'保持；补 iPad 键盘方向键映射。'},
+  {id:'ipad', title:'iPad 双页与跨页选择', area:'阅读器', status:'done', score:80,
+   summary:'regular 尺寸类双页；跨页共享 SelectionState；长按手势幂等安装，避免重复识别器。',
+   evidence:['Mini Read/Views/BookContentUI/UIkit Composer/PVC/MainViewController.swift:2480-2579'],
+   gap:'双页固定卷曲；跨页选择没有后续菜单。',
+   next:'补选择菜单；尊重用户的翻页偏好。'},
+  {id:'selection', title:'文本选择', area:'阅读器', status:'partial', score:40,
+   summary:'仅 iPad regular 长按可跨页选中；iPhone 没有选中入口，选中后也没有菜单或动作。',
+   evidence:['Mini Read/Views/BookContentUI/UIkit Composer/PVC/MainViewController.swift:2502-2510（guard isRegular）','Mini Read/Views/BookContentUI/UIkit Composer/TextRender/TextRenderView.swift:11（不持有手势）'],
+   gap:'iPhone 完全缺失；选中后无法高亮/笔记/复制/查词；VoiceOver 无法选择。',
+   next:'统一 iPhone/iPad 的选择层；接 UIMenu（高亮、笔记、复制、查词）。'},
+  {id:'highlight', title:'高亮 / 下划线', area:'笔记', status:'missing', score:12,
+   summary:'有绘制与回调骨架，但 onHighlight / onUnderline 从未被调用；applyHighlight 只改共享 NSTextStorage，不持久化。',
+   evidence:['Mini Read/Views/BookContentUI/UIkit Composer/UITextVC/TextVC.swift:129-131','Mini Read/Views/BookContentUI/UIkit Composer/UITextVC/TextVC.swift:322-342','Mini Read/Views/BookContentUI/UIkit Composer/TextRender/TextRenderView.swift:28-31','grep 全工程：三个 on* 回调没有调用点'],
+   gap:'无入口、无模型、无持久化、无撤销；设置里的颜色/透明度全部未消费；直接改共享 storage 可能影响分页。',
+   next:'先建 Annotation 模型（bookKey/src/charRange/text/color/style/note），再用临时属性或 overlay 绘制，菜单入口接上。'},
+  {id:'notes', title:'笔记系统', area:'笔记', status:'missing', score:5,
+   summary:'设置页是功能清单 + 三个 Picker；没有笔记模型、没有编辑 UI，目录面板明确不加笔记页签。',
+   evidence:['Mini Read/Views/Settings/设置分项/3 Notes/笔记系统.swift:29-60','Mini Read/Views/BookContentUI/Eleganttocpanel.swift:7-11（笔记页签被刻意拿掉）'],
+   gap:'文字/语音/手写/图片/想法卡片都只是文案。',
+   next:'先做文字笔记 + 高亮关联；语音/手写后置。'},
+  {id:'search', title:'全书搜索', area:'笔记', status:'missing', score:8,
+   summary:'书库搜索只匹配书名/作者/出版社；目录面板只有章节标题过滤；正文没有索引。',
+   evidence:['Mini Read/Views/TabViews/TabScreens.swift:190-243','Mini Read/Services/TextPagelization/ChapterHTMLParser.swift:18-19（注释把全书搜索列为下游消费者）'],
+   gap:'无法搜正文；没有结果高亮/跳转。',
+   next:'按书建 ChapterBlock 文本索引；结果带 src + 字符偏移，跳转复用现有 anchor 链路。'},
+  {id:'bookmark', title:'书签', area:'阅读器', status:'done', score:92,
+   summary:'SwiftData Bookmark 挂在书上，目录面板书签页签，字符锚点跳转；删书级联清理。',
+   evidence:['Mini Read/Models/UserDataModel/Bookmark.swift','Mini Read/View Model/ContentsPanelModel.swift:577-601','Mini Read/Views/BookContentUI/Eleganttocpanel.swift'],
+   gap:'没有明显缺口。',
+   next:'可补书签备注/排序；与标注共用一套定位模型。'},
+  {id:'toc-panel', title:'目录面板', area:'阅读器', status:'done', score:90,
+   summary:'目录/书签双页签，当前章定位，已读状态，标题过滤；VoiceOver 标签完整。',
+   evidence:['Mini Read/Views/BookContentUI/Eleganttocpanel.swift:16-70','Mini Read/Views/BookContentUI/Eleganttocpanel.swift:288-289','Mini Read/Views/BookContentUI/Eleganttocpanel.swift:359-363'],
+   gap:'笔记页签缺席是刻意为之，不是遗漏。',
+   next:'笔记模型落地后再加第三个页签。'},
+  {id:'stats', title:'阅读统计', area:'书库', status:'done', score:88,
+   summary:'ReadingSession + 纯函数聚合；周/月/季/年、热力图、连续天数、BriefCard 都接上了。',
+   evidence:['Mini Read/Models/ReadingStats/ReadingStatsEngine.swift:5-21','Mini Read/Models/UserDataModel/ReadingSessionModel.swift','Mini Read/Views/ReadingStats/ReadingStatsView.swift'],
+   gap:'没有明显缺口。',
+   next:'可补导出/年度报告；注意跨时区口径已在注释里说明限制。'},
+  {id:'fonts', title:'字体导入与注册', area:'设置', status:'done', score:88,
+   summary:'导入字体注册进进程，启动时 registerAll；阅读字体解析支持内置与 custom:<id>。',
+   evidence:['Mini Read/Services/ImportedFontStore.swift','Mini Read/App/TheNewVelliumApp.swift:23-25'],
+   gap:'字体授权/回退提示较弱。',
+   next:'导入时校验字体名与授权提示；正文缺字时给可见回退说明。'},
+  {id:'theme', title:'主题与纸面背景', area:'设置', status:'partial', score:82,
+   summary:'阅读背景支持纯色/图片/纸纹；纸面推导正文墨色；换背景会让分页缓存失效。',
+   evidence:['Mini Read/Services/ReadingBackground.swift','Mini Read/Models/SettingsModels/SettingModel.swift:38-44','Mini Read/Services/TextPagelization/ChapterTypography.swift:38-41'],
+   gap:'currentTheme / custom* 六个字段未接；App 背景暗色变体也未消费。',
+   next:'要么删除旧主题字段，要么把自定义主题接到 ReadingBackground。'},
+  {id:'library', title:'书库', area:'书库', status:'partial', score:82,
+   summary:'网格、排序、元数据搜索、删除、导入都可用；排序偏好与设置页共用同一份枚举。',
+   evidence:['Mini Read/Views/BookContentUI/BookCardFlow.swift:71（LazyVGrid）','Mini Read/Views/TabViews/TabScreens.swift:147-179','Mini Read/Models/UserDataModel/LibrarySortOption.swift'],
+   gap:'libraryViewMode / listViewStyle 未接；没有列表/封面墙；搜索不含正文。',
+   next:'先接 grid/list 两种真实布局，删掉 coverWall 或实现它。'},
+  {id:'collections', title:'书单 Collections', area:'书库', status:'done', score:88,
+   summary:'SwiftData BookCollection，多对多，新建/重命名/换封面/删除，首页横向货架与详情。',
+   evidence:['Mini Read/Models/UserDataModel/BookCollection.swift:23-40','Mini Read/Views/TabViews/HomeSections/Collection.swift','Mini Read/Views/TabViews/HomeSections/CollectionDetail.swift'],
+   gap:'拖拽重排未做（sortIndex 已预留）。',
+   next:'补拖拽排序；书单封面可选书已支持。'},
+  {id:'metadata', title:'元数据编辑', area:'书库', status:'done', score:85,
+   summary:'书名/作者/出版社/封面编辑，冲突确认与继续编辑路径都有。',
+   evidence:['Mini Read/Views/Settings/设置分项/2 Library/BookMetadataEditor.swift'],
+   gap:'系列/译者等字段未覆盖。',
+   next:'补系列/译者；与 OPF 解析字段对齐。'},
+  {id:'profiles', title:'设置配置文件', area:'设置', status:'done', score:85,
+   summary:'导出/导入/套用/命名/删除；字段清单集中在 SettingsProfile，重置有二次确认。',
+   evidence:['Mini Read/Models/SettingsModels/SettingsProfile.swift:141-216','Mini Read/Views/Settings/设置分项/6 System/通用设置.swift:23-35'],
+   gap:'配置文件会把大量未接线字段一起带走，造成「看起来生效」的错觉。',
+   next:'字段清理后同步精简 profile；导入时提示哪些字段未接线。'},
+  {id:'storage', title:'存储管理', area:'设置', status:'partial', score:65,
+   summary:'真实扫描/分类/清理；自动清理按缓存上限或设备低空间触发。',
+   evidence:['Mini Read/Views/Settings/设置分项/2 Library/存储管理.swift:231-256','Mini Read/Views/Settings/设置分项/2 Library/存储管理.swift:425-429','Mini Read/Services/StorageAnalyzer.swift'],
+   gap:'preloadPages / imageCacheQuality 未接；cacheSizeLimit 只影响存储页；阅读器分页缓存无字节上限。',
+   next:'把缓存上限下沉到 PaginationCache/图片解码；存储页只做展示与手动清理。'},
+  {id:'localization', title:'本地化', area:'系统', status:'missing', score:15,
+   summary:'无 .xcstrings / .lproj；界面中英混排；appLanguage / dateFormat 未接。',
+   evidence:['Mini Read/Views/TabViews/TabScreens.swift:219-243','Mini Read/Models/SettingsModels/SettingModel.swift:110-111'],
+   gap:'无法切换语言；日期格式固定；英文文案散落在 SwiftUI 视图里。',
+   next:'先建 String Catalog，把阅读器/书库/设置三块文案收口；再接 appLanguage 与 dateFormat。'},
+  {id:'a11y', title:'Accessibility', area:'系统', status:'partial', score:35,
+   summary:'目录/书签有 VoiceOver 标签；Reduce Motion 有降级；封面页有 accessibilityElements。',
+   evidence:['Mini Read/Views/BookContentUI/Eleganttocpanel.swift:288-289','Mini Read/Views/BookContentUI/Eleganttocpanel.swift:359-363','Mini Read/Views/BookContentUI/UIkit Composer/UITextVC/CoverPageViewController.swift:207-211','Mini Read/Views/BookContentUI/UIkit Composer/TextRender/TextRenderView.swift（无 a11y 元素）'],
+   gap:'正文没有 accessibilityElements，VoiceOver 读不到书；选择/标注无无障碍动作；动态字体未贯穿阅读器。',
+   next:'为每页生成段落级 accessibility elements；补 UIAccessibilityCustomAction。'},
+  {id:'tests', title:'测试与 CI', area:'系统', status:'missing', score:5,
+   summary:'工程只有 1 个 app target，没有 test target；本次 xcodebuild 能过，但没有回归网。',
+   evidence:['xcodebuild -list：Targets / Schemes 均只有 Mini Read','工程无 Tests 目录'],
+   gap:'解析/分页/进度/缓存全是纯函数或可测逻辑，却没有一条断言。',
+   next:'先加 MiniReadTests：ChapterHTMLParser、PaginationConfig.stableDigest、ReadingStatsEngine、progress、锚点换算。'},
+  {id:'about', title:'关于 / 反馈 / 更新', area:'系统', status:'missing', score:5,
+   summary:'版本号硬编码 0.1029；更新日志/开源许可/教程/FAQ 是占位 Text；检查更新/反馈/评分空实现。',
+   evidence:['Mini Read/Views/Settings/设置分项/6 System/关于.swift:17-41'],
+   gap:'用户无法反馈，也无法知道版本变化。',
+   next:'至少接邮件反馈 + 版本号从 Bundle 读；更新日志用本地 Markdown。'},
+  {id:'diagnostics', title:'性能诊断', area:'系统', status:'missing', score:5,
+   summary:'查看日志/网络诊断/性能监控三个按钮空实现；实验性功能页存在。',
+   evidence:['Mini Read/Views/Settings/设置分项/6 System/性能优化.swift:18-30'],
+   gap:'出问题时没有可观测性；日志只靠 print。',
+   next:'接 OSLog 查看器 / MetricKit；或者删掉入口，避免误导。'},
+  {id:'sync', title:'云同步 / 备份', area:'系统', status:'missing', score:0,
+   summary:'明确本地优先：存储页写明不提供云端同步；换设备/重装会丢书与进度。',
+   evidence:['Mini Read/Views/Settings/设置分项/2 Library/存储管理.swift:345-354'],
+   gap:'没有导出书库/进度的备份路径。',
+   next:'不作为近期目标；若做，先做 iCloud Drive 备份而不是 CloudKit 实时同步。'}
+
+];
+
+const wiring = [
+  {field:'currentTheme', group:'主题', status:'dead', impact:'阅读纸面由 readingBackgroundMode / Color / Image 决定；currentTheme 没有任何消费者。'},
+  {field:'customBackgroundColor / customTextColor / customLinkColor / customSelectionColor', group:'主题', status:'dead', impact:'自定义主题整组未接。正文墨色由纸面推导，链接色与选中色也没有读取这四个字段。'},
+  {field:'followSystemAppearance', group:'主题', status:'dead', impact:'没有消费者；App 背景的暗色变体同样未接（见下）。'},
+  {field:'libraryViewMode', group:'书库', status:'ui', impact:'设置页可切 grid / coverWall，但 BookCardFlow 始终使用 LazyVGrid，没有分支。'},
+  {field:'listViewStyle', group:'书库', status:'dead', impact:'全工程没有消费者；列表样式没有实现。'},
+  {field:'storageLocation', group:'存储', status:'dead', impact:'存储页显示的是硬编码路径 Documents/EpubReader、Library/Caches，不读这个字段。'},
+  {field:'preloadPages', group:'存储', status:'ui', impact:'阅读器 prefetchWindow 固定前后 1 章 + 后 2 章，不读 preloadPages。'},
+  {field:'imageCacheQuality', group:'存储', status:'ui', impact:'图片解码没有质量档位；ChapterTypography 直接解码原图。'},
+  {field:'cacheSizeLimit', group:'存储', status:'partial', impact:'只在存储管理页作为提示与自动清理阈值；阅读器分页缓存没有字节级上限。'},
+  {field:'autoCleanCache', group:'存储', status:'partial', impact:'存储页进入时按上限/低空间触发清理；不是全局缓存策略。'},
+  {field:'textAlignment', group:'排版', status:'dead', impact:'ChapterTypography 固定使用 .justified；设置字段没有进入 PaginationConfig。'},
+  {field:'maxImageCacheCount', group:'存储', status:'dead', impact:'只在 PictureData.swift 的注释里出现；没有图片缓存实现。'},
+  {field:'defaultHighlightColor', group:'标注', status:'ui', impact:'TextVC.applyHighlight 固定 systemYellow；设置只改变 Picker。'},
+  {field:'highlightOpacity', group:'标注', status:'ui', impact:'固定 0.40（深色）/ 0.55（浅色）；设置只显示百分比。'},
+  {field:'defaultAnnotationStyle', group:'标注', status:'ui', impact:'没有标注入口，样式字段没有消费者。'},
+  {field:'longPressAction / doubleTapAction', group:'标注', status:'ui', impact:'长按只做选中；双击没有处理；两个动作枚举都没有读取。'},
+  {field:'showNoteIndicators', group:'标注', status:'ui', impact:'没有笔记模型，指示器无处可显示。'},
+  {field:'noteDisplayPosition / noteBubbleStyle / showNoteCount', group:'笔记', status:'ui', impact:'笔记系统是空壳：只有信息行与 Picker，没有笔记实体或展示 UI。'},
+  {field:'exportFormat', group:'导出', status:'ui', impact:'没有导出器；设置只改变 Picker。'},
+  {field:'includeOriginalText / includeMetadata / exportByChapter', group:'导出', status:'ui', impact:'没有导出器；三个开关没有消费者。'},
+  {field:'watermarkEnabled / watermarkText', group:'导出', status:'ui', impact:'没有分享/导出实现；水印字段没有消费者。'},
+  {field:'appLanguage', group:'系统', status:'ui', impact:'工程没有 .xcstrings/.lproj；切换语言不会改变界面。'},
+  {field:'dateFormat', group:'系统', status:'dead', impact:'日期格式化没有读取该字段；统计/书库使用系统默认。'},
+  {field:'appBackgroundColorHex_Dark / appBackgroundGradientStartHex_Dark / appBackgroundGradientEndHex_Dark', group:'个性化', status:'partial', impact:'只在深色模式的「重置背景」里被读取；正常渲染仍用亮色字段，切换深色不会自动换背景。'},
+  {field:'fontFamily', group:'排版', status:'wired', impact:'PaginationConfig + resolveReadingUIFont；换字体进入缓存摘要，自动重排。'},
+  {field:'readingBackgroundMode / readingBackgroundColorHex / readingBackgroundImageSource', group:'阅读', status:'wired', impact:'ReadingBackground 统一解析纯色/图片/纸纹；正文墨色随纸面推导。'},
+  {field:'pageTransitionStyle', group:'翻页', status:'wired', impact:'PageTurnStyle + resolvedTurnStyle；iPad/Reduce Motion 有覆盖规则。'},
+  {field:'sortBy', group:'书库', status:'wired', impact:'LibrarySortOption 与设置页/书库共用同一份枚举，排序真实生效。'},
+  {field:'duplicateHandling', group:'导入', status:'wired', impact:'Tabs 导入路径读取 skip / keepBoth；旧值 overwrite 会归位。'},
+  {field:'hapticFeedback', group:'系统', status:'wired', impact:'Haptics.seed 启动时播种，所有震动走统一总闸。'},
+  {field:'developerMode', group:'系统', status:'wired', impact:'控制存储页「目录浏览器」是否显示；只在设置模块内生效。'}
+];
+const archLayers = [
+  {name:'表现层', hint:'SwiftUI', nodes:[
+    {id:'tabs', title:'Tabs / iPhone / iPad', sub:'自适应外壳', role:'按水平尺寸类切换 iPhone 与 iPad 的导航/Tab 结构；搜索词、排序等跨页状态提升到外壳，切换尺寸类不丢。', files:['Tabs.swift','iPhoneOSTabs.swift','iPadOSTabs.swift'], note:'搜索/排序状态由外壳持有，是避免「旋转后搜索词丢失」的关键。'},
+    {id:'bookcontent', title:'BookContent', sub:'阅读器 SwiftUI 外壳', role:'承载阅读会话、工具栏、目录/书签面板、进度与书签绑定；把分页与手势交给 UIKit 控制器。', files:['BookContent.swift'], note:'SwiftUI 只做壳，复杂排版与手势没有硬塞进 SwiftUI。'},
+    {id:'settings', title:'Settings / SettingSplit', sub:'设置路由', role:'侧边栏/导航路由与 AppSettings 绑定；配置档案、重置、导入导出都从这里进入。', files:['SettingSplit.swift','SettingModel.swift'], note:'设置页完整度很高，但字段接线率是另一回事，见 04 节。'},
+    {id:'home', title:'HomeSections', sub:'首页', role:'继续读、阅读统计、书单货架；RecentCard / BriefCard / Collection 都消费真实 SwiftData 模型。', files:['iPhoneOSHome.swift','HomeSections/*.swift'], note:'首页不是静态 Demo，统计与书单都有真实写入路径。'}
+  ]},
+  {name:'阅读引擎', hint:'UIKit / TextKit', nodes:[
+    {id:'pagehost', title:'PageViewControllerRepresentable → ViewController', sub:'UIPageViewController 宿主', role:'管理页面数组、翻页手势、预取窗口、全书页码索引、可见位置上报、iPad 跨页选择。', files:['MainViewController.swift'], note:'2579 行，工程最重但注释最密；很多修复都写在注释里。'},
+    {id:'textvc', title:'TextViewControllerTest', sub:'单页 VC', role:'安装纸面背景、页码/章节标题 chrome、TextRenderView 约束；不解释设置字段，只消费父 VC 解析好的值。', files:['TextVC.swift'], note:'「本页不读背景字段」避免两处各写一套回退。'},
+    {id:'render', title:'TextRenderView', sub:'TextKit 绘制', role:'绘制背景高亮、选中范围、字形与下划线；提供字符命中测试与标注命中测试。', files:['TextRenderView.swift'], note:'不持有手势；选中状态由外部写入共享 SelectionState。'},
+    {id:'layout', title:'ChapterLayout', sub:'共享排版对象', role:'一个 NSTextStorage + 一个 NSLayoutManager + 多个 NSTextContainer；每页一个 container，共享同一次排版。', files:['ChapterLayout.swift'], note:'首行缩进跨页正确的关键；段落末行在全章范围判定。'},
+    {id:'lru', title:'ChapterLRUCache', sub:'章节 LRU', role:'最多缓存 5 章 VC；淘汰时回调清理索引；pin 当前上屏章，避免手势/进度静默失效。', files:['ChapterLRUCache.swift'], note:'淘汰当前章会让 findLocation 返回 nil，而且不会自愈。'}
+  ]},
+  {name:'内容管线', hint:'Parse → Layout → Cache', nodes:[
+    {id:'epub', title:'EPUBBook / OPF / EPUBNavigation', sub:'EPUB 解析', role:'container.xml → OPF → metadata / manifest / spine；nav → NCX → spine 三级目录兜底，保留 fragment。', files:['epubParser.swift','OPF/*.swift','EPUBNavigation.swift'], note:'目录只说明「跳到哪儿」，阅读顺序以 spine 为准。'},
+    {id:'html', title:'ChapterHTMLParser', sub:'正文块模型', role:'Kanna HTML 容错解析，产出 heading / paragraph / quote / listItem / image / separator 与目录锚点。', files:['ChapterHTMLParser.swift'], note:'注释明确把全书搜索、高亮坐标、无障碍朗读列为下游消费者。'},
+    {id:'typography', title:'ChapterTypography', sub:'富文本排版', role:'块 → NSAttributedString：标题层级、引用缩进、列表悬挂、图片附件、前置页样式、锚点字符偏移。', files:['ChapterTypography.swift'], note:'PaginationConfig 的 stableDigest 进入缓存键，换字体/纸面自动重排。'},
+    {id:'renderpipe', title:'ChapterRender', sub:'单一构建路径', role:'解析 → 版权页/前置页判定 → 选择排版样式 → ChapterLayout；加载、索引、探针共用。', files:['ChapterRender.swift'], note:'三处各写一遍必然漂移，所以收口成唯一入口。'},
+    {id:'cache', title:'PaginationCache', sub:'磁盘分页缓存', role:'key = 书籍身份 + 章相对路径 + 排版配置摘要；归档整章富文本，冷启动可复用。', files:['PaginationCache.swift'], note:'图片附件会让归档体变大；这是图片能正常渲染的必要代价。'}
+  ]},
+  {name:'数据与服务', hint:'SwiftData / Services', nodes:[
+    {id:'models', title:'SwiftData 模型', sub:'本地状态', role:'bookItem、Bookmark、BookCollection、ReadingSession、ReadingProgressRecord、AppSettings；关系与级联删除已建模。', files:['Models/UserDataModel/*.swift','Models/SettingsModels/*.swift'], note:'bookItem 存绝对 URL，是当前最现实的数据风险。'},
+    {id:'stats', title:'ReadingStatsEngine', sub:'统计聚合', role:'按本地日边界切分跨午夜 session；周/月/季/年、热力图、连续天数、书籍维度全部纯函数。', files:['ReadingStatsEngine.swift'], note:'视图只取数与渲染，口径不分散。'},
+    {id:'services', title:'ImportedFontStore / ReadingBackground / Haptics', sub:'横切服务', role:'字体注册与解析、纸面/背景解析、触觉总闸；启动时 registerAll / seed。', files:['ImportedFontStore.swift','ReadingBackground.swift','Haptics.swift'], note:'触觉开关必须启动时播种，否则冷启动第一帧仍会震动。'},
+    {id:'importer', title:'epubImpoter', sub:'导入执行体', role:'解压、SHA-256 去重、备份/解压目录命名、结构化错误；所有磁盘工作串行在专用队列。', files:['epubImpoter.swift'], note:'去重键是内容哈希，不是文件名；同名不同书不会互相覆盖。'}
+  ]}
+];
+
+const roadmap = [
+  {id:'p0', title:'P0 · 现在', subtitle:'1–2 周 · 阅读器地基', tasks:[
+    {id:'annotation', title:'标注闭环', desc:'Annotation 模型 + 选择菜单 + 持久化 + 设置消费；绘制不改共享 NSTextStorage。', impact:'高', effort:'中'},
+    {id:'paths', title:'书籍相对路径', desc:'只存相对 Documents 的路径；打开时拼当前容器；加一次启动自愈迁移。', impact:'高', effort:'低'},
+    {id:'a11y', title:'正文 VoiceOver + iPhone 选择', desc:'每页段落级 accessibility elements；统一 iPhone/iPad 选择层与 UIMenu。', impact:'高', effort:'中'},
+    {id:'tests', title:'测试 target', desc:'解析、摘要、统计、进度、锚点五组纯函数测试；先建立回归网。', impact:'高', effort:'低'},
+    {id:'progress', title:'章 + 页进度', desc:'单文件 EPUB 也能显示书内位置；书架显示章进度 + 页进度。', impact:'中', effort:'中'}
+  ]},
+  {id:'p1', title:'P1 · 接下来', subtitle:'2–4 周 · 把入口接上', tasks:[
+    {id:'search', title:'全书搜索', desc:'ChapterBlock 文本索引；结果带 src + 字符偏移；复用现有 anchor 跳转。', impact:'高', effort:'中'},
+    {id:'notes', title:'笔记 UI', desc:'文字笔记 + 高亮关联 + 目录面板第三页签；语音/手写后置。', impact:'高', effort:'高'},
+    {id:'settings', title:'设置字段清理', desc:'每个字段做「消费者或删除」二选一；SettingsProfile 同步精简。', impact:'中', effort:'中'},
+    {id:'l10n', title:'String Catalog', desc:'阅读器/书库/设置三块文案收口；接 appLanguage 与 dateFormat。', impact:'中', effort:'中'},
+    {id:'cache', title:'缓存字节上限', desc:'图片按屏宽下采样；PaginationCache 按字节限流；接 imageCacheQuality。', impact:'中', effort:'中'}
+  ]},
+  {id:'p2', title:'P2 · 之后', subtitle:'按产品节奏 · 扩展', tasks:[
+    {id:'export', title:'导出 / 分享', desc:'Markdown/PDF；包含原文/元数据/按章；水印与自定义模板。', impact:'中', effort:'高'},
+    {id:'about', title:'关于 / 反馈 / 更新日志', desc:'版本号从 Bundle 读；更新日志用本地 Markdown；接邮件反馈。', impact:'低', effort:'低'},
+    {id:'diagnostics', title:'诊断能力', desc:'OSLog 查看器 / MetricKit；或者删掉三个空按钮，避免误导。', impact:'低', effort:'中'},
+    {id:'css', title:'CSS 子集', desc:'表格/脚注/ruby 优先；不要追求全量 CSS，先覆盖技术书与学术书。', impact:'中', effort:'高'},
+    {id:'backup', title:'iCloud Drive 备份', desc:'先做书库 + 进度的可导出备份，不做 CloudKit 实时同步。', impact:'低', effort:'高'}
+  ]}
+];
+
+(function(){
+  'use strict';
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const store = {
+    get(key){ try { return localStorage.getItem(key); } catch (e) { return null; } },
+    set(key, value){ try { localStorage.setItem(key, value); } catch (e) {} }
+  };
+  const statusMeta = {
+    done:    { label:'已完成', cls:'done' },
+    partial: { label:'部分完成', cls:'partial' },
+    missing: { label:'未实现', cls:'missing' },
+    risk:    { label:'风险项', cls:'risk' }
+  };
+  const wiringMeta = {
+    dead:    { label:'零消费', cls:'dead' },
+    ui:      { label:'仅 UI', cls:'ui' },
+    partial: { label:'部分接线', cls:'partial' },
+    wired:   { label:'已接线', cls:'wired' }
+  };
+
+  // ---------- theme ----------
+  const root = document.documentElement;
+  const themeBtn = $('#themeToggle');
+  const savedTheme = store.get('mr-theme');
+  if (savedTheme === 'dark' || savedTheme === 'light') root.dataset.theme = savedTheme;
+  function syncThemeBtn(){
+    themeBtn.textContent = root.dataset.theme === 'dark' ? '☀ 浅色' : '◐ 深色';
+  }
+  syncThemeBtn();
+  themeBtn.addEventListener('click', () => {
+    root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+    store.set('mr-theme', root.dataset.theme);
+    syncThemeBtn();
+  });
+
+  // ---------- scroll progress ----------
+  const scrollBar = $('#scrollBar');
+  function updateScrollBar(){
+    const doc = document.documentElement;
+    const max = doc.scrollHeight - doc.clientHeight;
+    scrollBar.style.width = (max > 0 ? (doc.scrollTop / max) * 100 : 0) + '%';
+  }
+  window.addEventListener('scroll', updateScrollBar, { passive:true });
+  updateScrollBar();
+
+  // ---------- active nav ----------
+  const navLinks = $$('.nav a');
+  const sectionObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      navLinks.forEach((link) => {
+        link.classList.toggle('active', link.getAttribute('href') === '#' + entry.target.id);
+      });
+    });
+  }, { rootMargin:'-18% 0px -72% 0px' });
+  $$('main section[id]').forEach((section) => sectionObserver.observe(section));
+
+  // ---------- hero numbers ----------
+  $$('[data-count]').forEach((el) => {
+    el.textContent = Number(el.dataset.count || 0).toLocaleString('en-US');
+  });
+
+  const score = 70;
+  const ring = $('#scoreRing');
+  const scoreNum = $('#scoreNum');
+  const circumference = 2 * Math.PI * 52;
+  ring.style.strokeDasharray = String(circumference);
+  setTimeout(() => { ring.style.strokeDashoffset = String(circumference * (1 - score / 100)); }, 250);
+  const scoreStart = performance.now();
+  function tickScore(now){
+    const p = Math.min(1, (now - scoreStart) / 1200);
+    const eased = 1 - Math.pow(1 - p, 3);
+    scoreNum.textContent = String(Math.round(score * eased));
+    if (p < 1) requestAnimationFrame(tickScore);
+  }
+  requestAnimationFrame(tickScore);
+  setTimeout(() => { scoreNum.textContent = String(score); }, 1400);
+
+  const barObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      entry.target.style.width = entry.target.dataset.score + '%';
+      barObserver.unobserve(entry.target);
+    });
+  }, { threshold:.25 });
+  $$('.bar i[data-score]').forEach((el) => barObserver.observe(el));
+
+    // ---------- feature matrix ----------
+  const featureState = { status:'all', area:'all', q:'' };
+  const featureList = $('#featureList');
+  const featureCount = $('#featureCount');
+  const openFeatures = new Set();
+
+  function updateFeatureCounts(){
+    $$('#statusChips .chip-btn').forEach((btn) => {
+      const s = btn.dataset.status;
+      const n = s === 'all' ? features.length : features.filter((f) => f.status === s).length;
+      let badge = btn.querySelector('.n');
+      if (!badge) { badge = document.createElement('span'); badge.className = 'n'; btn.appendChild(badge); }
+      badge.textContent = n;
+    });
+  }
+
+  function renderFeatures(){
+    const q = featureState.q.trim().toLowerCase();
+    const list = features.filter((f) => {
+      if (featureState.status !== 'all' && f.status !== featureState.status) return false;
+      if (featureState.area !== 'all' && f.area !== featureState.area) return false;
+      if (q) {
+        const hay = [f.title, f.area, f.summary, f.gap, f.next, f.evidence.join(' ')].join(' ').toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    featureCount.textContent = '显示 ' + list.length + ' / ' + features.length + ' 项';
+    if (!list.length) {
+      featureList.innerHTML = '<div class="empty">没有匹配的功能项。换个关键词或筛选条件试试。</div>';
+      return;
+    }
+    featureList.innerHTML = list.map((f) => {
+      const meta = statusMeta[f.status];
+      const evidence = f.evidence.map((e) => '<li><code>' + esc(e) + '</code></li>').join('');
+      return '<article class="feature" data-status="' + f.status + '" data-id="' + f.id + '">' +
+        '<button class="feature-head" type="button" aria-expanded="false">' +
+          '<span class="status-dot"></span>' +
+          '<span class="feature-title"><strong>' + esc(f.title) + '</strong><small>' + esc(f.area) + ' · ' + meta.label + ' · ' + f.score + '%</small></span>' +
+          '<span class="mini-bar" aria-hidden="true"><i style="width:' + f.score + '%"></i></span>' +
+          '<span class="chev">+</span>' +
+        '</button>' +
+        '<div class="feature-body">' +
+          '<p>' + esc(f.summary) + '</p>' +
+          '<div class="detail-grid">' +
+            '<div><h5>代码证据</h5><ul>' + evidence + '</ul></div>' +
+            '<div><h5>缺口</h5><p>' + esc(f.gap) + '</p></div>' +
+            '<div><h5>建议</h5><p>' + esc(f.next) + '</p></div>' +
+          '</div>' +
+        '</div>' +
+      '</article>';
+    }).join('');
+    $$('.feature', featureList).forEach((card) => {
+      if (!openFeatures.has(card.dataset.id)) return;
+      card.classList.add('open');
+      const head = $('.feature-head', card);
+      if (head) head.setAttribute('aria-expanded', 'true');
+    });
+  }
+
+  featureList.addEventListener('click', (event) => {
+    const head = event.target.closest('.feature-head');
+    if (!head) return;
+    const card = head.closest('.feature');
+    const open = card.classList.toggle('open');
+    head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) openFeatures.add(card.dataset.id);
+    else openFeatures.delete(card.dataset.id);
+  });
+
+  $('#featureSearch').addEventListener('input', (event) => {
+    featureState.q = event.target.value;
+    renderFeatures();
+  });
+  $$('#statusChips .chip-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      featureState.status = btn.dataset.status;
+      $$('#statusChips .chip-btn').forEach((b) => b.classList.toggle('active', b === btn));
+      renderFeatures();
+    });
+  });
+  $$('#areaChips .chip-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      featureState.area = btn.dataset.area;
+      $$('#areaChips .chip-btn').forEach((b) => b.classList.toggle('active', b === btn));
+      renderFeatures();
+    });
+  });
+
+  // ---------- wiring table ----------
+  const wiringLabels = {
+    'currentTheme':'阅读主题',
+    'customBackgroundColor / customTextColor / customLinkColor / customSelectionColor':'自定义主题颜色',
+    'followSystemAppearance':'跟随系统外观',
+    'libraryViewMode':'书库显示方式',
+    'listViewStyle':'列表样式',
+    'storageLocation':'存储位置',
+    'preloadPages':'预加载页数',
+    'imageCacheQuality':'图片缓存质量',
+    'cacheSizeLimit':'缓存大小上限',
+    'autoCleanCache':'自动清理缓存',
+    'textAlignment':'正文对齐',
+    'maxImageCacheCount':'图片缓存数量',
+    'defaultHighlightColor':'默认高亮颜色',
+    'highlightOpacity':'高亮透明度',
+    'defaultAnnotationStyle':'默认标注样式',
+    'longPressAction / doubleTapAction':'长按 / 双击动作',
+    'showNoteIndicators':'笔记指示器',
+    'noteDisplayPosition / noteBubbleStyle / showNoteCount':'笔记显示方式',
+    'exportFormat':'导出格式',
+    'includeOriginalText / includeMetadata / exportByChapter':'导出内容选项',
+    'watermarkEnabled / watermarkText':'导出水印',
+    'appLanguage':'界面语言',
+    'dateFormat':'日期格式',
+    'appBackgroundColorHex_Dark / appBackgroundGradientStartHex_Dark / appBackgroundGradientEndHex_Dark':'暗色背景变体',
+    'fontFamily':'正文字体',
+    'readingBackgroundMode / readingBackgroundColorHex / readingBackgroundImageSource':'阅读背景',
+    'pageTransitionStyle':'翻页方式',
+    'sortBy':'书库排序',
+    'duplicateHandling':'重复书籍处理',
+    'hapticFeedback':'触觉反馈',
+    'developerMode':'开发者模式'
+  };
+  const wiringState = { status:'all', q:'' };
+  const wiringBody = $('#wiringBody');
+  const wiringCount = $('#wiringCount');
+
+  function renderWiring(){
+    const q = wiringState.q.trim().toLowerCase();
+    const list = wiring.filter((w) => {
+      if (wiringState.status !== 'all' && w.status !== wiringState.status) return false;
+      if (q) {
+        const label = wiringLabels[w.field] || w.group;
+        const hay = [w.field, label, w.group, w.impact, wiringMeta[w.status].label].join(' ').toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    wiringCount.textContent = '显示 ' + list.length + ' / ' + wiring.length + ' 项';
+    wiringBody.innerHTML = list.length ? list.map((w) => {
+      const meta = wiringMeta[w.status];
+      const label = wiringLabels[w.field] || w.group;
+      return '<tr data-status="' + w.status + '">' +
+        '<td><b style="font-size:12.5px">' + esc(label) + '</b><br><code>' + esc(w.field) + '</code></td>' +
+        '<td>' + esc(w.group) + '</td>' +
+        '<td><span class="pill ' + meta.cls + '">' + meta.label + '</span></td>' +
+        '<td>' + esc(w.impact) + '</td>' +
+      '</tr>';
+    }).join('') : '<tr><td colspan="4"><div class="empty">没有匹配的字段。</div></td></tr>';
+  }
+
+  $('#wiringSearch').addEventListener('input', (event) => {
+    wiringState.q = event.target.value;
+    renderWiring();
+  });
+  $$('#wiringChips .chip-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      wiringState.status = btn.dataset.wiring;
+      $$('#wiringChips .chip-btn').forEach((b) => b.classList.toggle('active', b === btn));
+      renderWiring();
+    });
+  });
+
+  // ---------- architecture ----------
+  const archGrid = $('#archGrid');
+  const archDetail = $('#archDetail');
+  const nodeIndex = {};
+  archGrid.innerHTML = archLayers.map((layer) => {
+    const nodes = layer.nodes.map((n) =>
+      '<button class="node" type="button" data-node="' + n.id + '"><b>' + esc(n.title) + '</b><small>' + esc(n.sub) + '</small></button>'
+    ).join('');
+    return '<div class="arch-layer"><h4>' + esc(layer.name) + ' <span style="opacity:.55;font-weight:400;letter-spacing:.04em">' + esc(layer.hint) + '</span></h4>' + nodes + '</div>';
+  }).join('');
+  archLayers.forEach((layer) => layer.nodes.forEach((node) => { nodeIndex[node.id] = node; }));
+
+  function showArchNode(node){
+    if (!node) return;
+    $$('.node', archGrid).forEach((btn) => btn.classList.toggle('active', btn.dataset.node === node.id));
+    archDetail.innerHTML = '<h3>' + esc(node.title) + '</h3>' +
+      '<p>' + esc(node.role) + '</p>' +
+      '<div class="files">' + node.files.map((f) => '<code>' + esc(f) + '</code>').join('') + '</div>' +
+      '<div class="note">观察：' + esc(node.note) + '</div>';
+  }
+  archGrid.addEventListener('click', (event) => {
+    const btn = event.target.closest('.node');
+    if (!btn) return;
+    showArchNode(nodeIndex[btn.dataset.node]);
+  });
+
+  // ---------- roadmap ----------
+  const doneTasks = new Set();
+  try { JSON.parse(store.get('mr-roadmap') || '[]').forEach((id) => doneTasks.add(id)); } catch (e) {}
+  const allTasks = roadmap.reduce((acc, lane) => acc.concat(lane.tasks), []);
+  const roadmapLanes = $('#roadmapLanes');
+  const roadmapProgress = $('#roadmapProgress');
+  const roadmapCount = $('#roadmapCount');
+
+  function updateRoadmap(){
+    const done = allTasks.filter((t) => doneTasks.has(t.id)).length;
+    const pct = allTasks.length ? (done / allTasks.length) * 100 : 0;
+    roadmapProgress.style.width = pct + '%';
+    roadmapCount.textContent = done + ' / ' + allTasks.length + ' 已完成';
+  }
+
+  function renderRoadmap(){
+    roadmapLanes.innerHTML = roadmap.map((lane) => {
+      const tasks = lane.tasks.map((t) => {
+        const checked = doneTasks.has(t.id);
+        const impactClass = t.impact === '高' ? 'high' : t.impact === '中' ? 'mid' : 'low';
+        const effortClass = t.effort === '高' ? 'high' : t.effort === '中' ? 'mid' : 'low';
+        return '<div class="task' + (checked ? ' done' : '') + '">' +
+          '<input type="checkbox" id="task-' + t.id + '" value="' + t.id + '"' + (checked ? ' checked' : '') + '>' +
+          '<label for="task-' + t.id + '"><b>' + esc(t.title) + '</b><span>' + esc(t.desc) + '</span>' +
+            '<span class="meta"><span class="tag-mini ' + impactClass + '">影响 ' + t.impact + '</span><span class="tag-mini ' + effortClass + '">成本 ' + t.effort + '</span></span>' +
+          '</label></div>';
+      }).join('');
+      return '<div class="lane"><h3>' + esc(lane.title) + '</h3><div class="lane-sub">' + esc(lane.subtitle) + '</div>' + tasks + '</div>';
+    }).join('');
+    updateRoadmap();
+  }
+
+  roadmapLanes.addEventListener('change', (event) => {
+    const cb = event.target.closest('input[type="checkbox"]');
+    if (!cb) return;
+    if (cb.checked) doneTasks.add(cb.value);
+    else doneTasks.delete(cb.value);
+    store.set('mr-roadmap', JSON.stringify(Array.from(doneTasks)));
+    const task = cb.closest('.task');
+    if (task) task.classList.toggle('done', cb.checked);
+    updateRoadmap();
+  });
+
+  $('#resetRoadmap').addEventListener('click', () => {
+    doneTasks.clear();
+    store.set('mr-roadmap', '[]');
+    renderRoadmap();
+  });
+
+  // ---------- copy summary ----------
+  $('#copySummary').addEventListener('click', async () => {
+    const text = [
+      'Mini Read 项目审计（2026-11-21）',
+      '综合完成度：70/100（核心阅读 85，周边能力 45）',
+      '规模：112 个 Swift 文件 / 27,117 行 / 1 个 target / 0 测试 target',
+      '结论：核心阅读链路成熟；标注、笔记、全书搜索、导出与设置接线是主要缺口。',
+      'P0：标注闭环、书籍相对路径、正文 VoiceOver + iPhone 选择、测试 target、章+页进度。'
+    ].join('\n');
+    const btn = $('#copySummary');
+    const original = btn.textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch (err) {}
+      document.body.removeChild(ta);
+    }
+    btn.textContent = '已复制 ✓';
+    setTimeout(() => { btn.textContent = original; }, 1600);
+  });
+
+  // ---------- init ----------
+  updateFeatureCounts();
+  renderFeatures();
+  renderWiring();
+  showArchNode(nodeIndex['pagehost']);
+  renderRoadmap();
+
+})();
+
+
+</script>
+</body>
+</html>

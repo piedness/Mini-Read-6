@@ -25,9 +25,13 @@ enum StorageCleaner {
     /// 只删磁盘，不动 `PaginationCache` 的内存层：内存字典不是线程安全的，
     /// 应当在清理完成后于主线程调用 `invalidateAll()` 一并清掉。
     /// 这样调用顺序是：后台删磁盘 → 主线程清内存 → 后台重新扫描。
+    ///
+    /// 走 `purgeDisk()` 而不是内部的目录删除：清盘要与 `save` 的后台落盘
+    /// 共用同一道闸（代次 + 锁），否则在途的写会在清理之后落盘，
+    /// 留下一个属于已删书、且任何入口都扫不到的缓存文件。
     @discardableResult
     static func purgePaginationCache() -> Int64 {
-        PaginationCache.purgeDiskContents()
+        PaginationCache.shared.purgeDisk()
     }
 
     // MARK: - 孤儿文件
@@ -76,13 +80,18 @@ enum StorageCleaner {
     /// 统计「书籍数据」的总占用：解压内容 + 原书备份 + 分页缓存。
     /// 前两项直接量根目录，因此也把没有对应记录的残留算了进去——
     /// 一键清除要清的就是这整块，统计口径必须和清理口径一致。
+    ///
+    /// **不跳过隐藏文件**：清理是整目录删除，隐藏文件（`.DS_Store`、`._*`、
+    /// 半截解压残留）也会被一并带走。统计若跳过它们，"只剩隐藏文件"就会被
+    /// 算成 0，清除入口据此判定"没有数据可清"而永久变灰——那批文件从此
+    /// 没有任何 UI 能删到（孤儿检测同样跳过隐藏文件）。
     static func bookDataBytes() -> Int64 {
-        StorageAnalyzer.directorySize(StoragePath.extractedRoot)
-        + StorageAnalyzer.directorySize(StoragePath.backupRoot)
-        + StorageAnalyzer.directorySize(StoragePath.paginationCache)
+        StorageAnalyzer.directorySize(StoragePath.extractedRoot, skippingHiddenFiles: false)
+        + StorageAnalyzer.directorySize(StoragePath.backupRoot, skippingHiddenFiles: false)
+        + StorageAnalyzer.directorySize(StoragePath.paginationCache, skippingHiddenFiles: false)
     }
 
-    /// 清空磁盘上的全部书籍数据，返回释放的字节数。同步，后台调用。
+    /// 清空磁盘上的全部书籍数据，返回实际释放量与清理后的剩余量。同步，后台调用。
     ///
     /// 只碰书：解压根目录、备份根目录、分页缓存。
     /// 字体、背景图、头像、设置一概不动——它们不是"书籍数据"，
@@ -91,12 +100,16 @@ enum StorageCleaner {
     /// 连根目录一起删而不是只删内容，是为了把隐藏文件、半截解压残留
     /// 一并带走；下次导入时 `importEPUB(from:)` 的 staging 会幂等重建这两个目录
     /// （staging 第 0 步 createDirectory，已存在也成功）。
+    ///
+    /// 返回的是**前后实测差值**而不是删除前的估算：删除可能部分失败，
+    /// 拿估算当"已释放"会在 UI 上报出一个不存在的数字。
     @discardableResult
-    static func purgeAllBookDataOnDisk() -> Int64 {
-        let freed = bookDataBytes()
+    static func purgeAllBookDataOnDisk() -> (freed: Int64, remaining: Int64) {
+        let before = bookDataBytes()
         deleteDirectory(at: StoragePath.extractedRoot)
         deleteDirectory(at: StoragePath.backupRoot)
-        PaginationCache.purgeDiskContents()
-        return freed
+        PaginationCache.shared.purgeDisk()
+        let after = bookDataBytes()
+        return (max(0, before - after), after)
     }
 }

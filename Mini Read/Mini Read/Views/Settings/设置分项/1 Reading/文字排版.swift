@@ -279,12 +279,6 @@ struct FontSelectionView: View {
                 }
             } header: {
                 Text("已导入字体")
-            } footer: {
-                if importedFonts.isEmpty {
-                    Text("尚未导入字体。点击下方「导入字体」按钮，从「文件」添加 TTF / OTF。")
-                } else {
-                    Text("导入的字体仅本机可用；删除当前选中的字体会自动回退到默认字体。")
-                }
             }
 
             // 导入入口：放在字体列表下方，比顶部工具栏更直观、也更好点击
@@ -421,8 +415,6 @@ struct MarginSettingsView: View {
                 )
             } header: {
                 Text("页面独立边距 (pt)")
-            } footer: {
-                Text("更宽的边距通常能带来更专注的阅读体验，但会减少单页可显示的文本量。")
             }
         }
         .navigationTitle("页边距")

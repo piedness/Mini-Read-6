@@ -39,6 +39,13 @@ final class bookItem {
     @Relationship(deleteRule: .cascade)
     var bookmarks: [Bookmark] = []
 
+    /// 高亮与笔记，级联删除。
+    ///
+    /// 与 `bookmarks` 同一套写法：单向 to-many + cascade。删书时标注跟着走，
+    /// 不需要在五个删除入口各写一次清理。
+    @Relationship(deleteRule: .cascade)
+    var annotations: [ReaderAnnotation] = []
+
     /// 所属书单（多对多）。
     ///
     /// 反向关系的声明在 `BookCollection.books` 上（那边带 `inverse:`），这里只是

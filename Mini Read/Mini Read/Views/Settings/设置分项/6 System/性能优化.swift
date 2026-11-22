@@ -31,8 +31,6 @@ struct PerformanceSettingsView: View {
                 
             } header: {
                 Text("调试")
-            } footer: {
-                Text("仅供调试APP使用")
             }
         }
         .modifier(CustomListModifier(title: "性能优化"))

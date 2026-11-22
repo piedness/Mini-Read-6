@@ -56,8 +56,6 @@ struct ThemeColorSettingsView: View {
                 .padding(.vertical, 4)
             } header: {
                 Text("背景类型")
-            } footer: {
-                Text("正文颜色会跟着纸面自动匹配：深色纸面用浅色文字，不需要单独设置。阅读器外围的系统界面（状态栏、目录面板）按纸面反色显示。")
             }
 
             if mode == .image {
@@ -107,8 +105,6 @@ struct ThemeColorSettingsView: View {
             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
         } header: {
             Text("预设纸色")
-        } footer: {
-            Text("六种纸色由浅到深排列，最后一种是夜间用的深色纸。")
         }
 
         Section {
@@ -119,8 +115,6 @@ struct ThemeColorSettingsView: View {
             )
         } header: {
             Text("自定义")
-        } footer: {
-            Text("可以挑任意颜色当纸面。偏暗的颜色会自动改用浅色文字，保证正文始终可读。")
         }
     }
 
@@ -144,8 +138,6 @@ struct ThemeColorSettingsView: View {
             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
         } header: {
             Text("内置纸张")
-        } footer: {
-            Text("纹理按整页铺满，双页模式下左右页共用同一张纹样，不会在书脊处断开。")
         }
     }
 

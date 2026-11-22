@@ -26,8 +26,30 @@ class TextViewControllerTest: UIViewController {
     /// 本页两个元素的布局（含「不显示」）。由父 VC 从设置 + 章节位置算出。
     private let chromePlacement: ReaderChrome.Placement
     let selectionState: SelectionState
+    /// 本章共享的标注投影。同一章的每一页拿到的是同一个实例。
+    let annotationState: ChapterAnnotationState
 
-    /// 供 iPad overlay 访问
+    /// 高亮透明度与边注指示器开关。属于绘制参数，不参与分页。
+    private let highlightOpacity: CGFloat
+    private let showsNoteIndicator: Bool
+
+    /// 读者点中标注：选中该标注并弹出操作菜单。
+    var onAnnotationTap: ((UUID) -> Void)?
+    /// 长按标注：打开编辑页。
+    var onAnnotationEdit: ((UUID) -> Void)?
+    /// 点在正文空白处（未命中标注）时上报。
+    var onBackgroundTap: (() -> Void)?
+
+    // MARK: 选区手柄
+
+    var onSelectionHandleTouchDown: ((SelectionHandle, NSRange) -> Void)?
+    /// 手柄移动（点已转换到本 VC 的 view 坐标系）。
+    var onSelectionHandleMoved: ((SelectionHandle, CGPoint) -> Void)?
+    var onSelectionHandleDragEnded: (() -> Void)?
+
+    private weak var selectionHandleOverlay: SelectionHandleOverlayView?
+
+    /// 供 iPad overlay / 容器访问
     private(set) weak var textRenderView: TextRenderView!
 
     /// 底部页码。
@@ -52,7 +74,8 @@ class TextViewControllerTest: UIViewController {
          margins: ReaderMargins,
          chapterTitle: String?,
          chromePlacement: ReaderChrome.Placement,
-         selectionState: SelectionState? = nil) {
+         selectionState: SelectionState? = nil,
+         annotationState: ChapterAnnotationState) {
         self.chapterLayout   = chapterLayout
         self.pageIndex       = pageIndex
         self.background      = background
@@ -61,6 +84,9 @@ class TextViewControllerTest: UIViewController {
         self.chapterTitle    = chapterTitle
         self.chromePlacement = chromePlacement
         self.selectionState  = selectionState ?? SelectionState()
+        self.annotationState = annotationState
+        self.highlightOpacity = CGFloat(settings.highlightOpacity)
+        self.showsNoteIndicator = settings.showNoteIndicators
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -123,12 +149,20 @@ class TextViewControllerTest: UIViewController {
         let rv = TextRenderView(
             chapterLayout: chapterLayout,
             pageIndex: pageIndex,
-            selectionState: selectionState
+            selectionState: selectionState,
+            annotationState: annotationState,
+            highlightOpacity: highlightOpacity
         )
         rv.translatesAutoresizingMaskIntoConstraints = false
-        rv.onHighlight        = { [weak self] in self?.applyHighlight(range: $0) }
-        rv.onUnderline        = { [weak self] in self?.applyUnderline(range: $0) }
-        rv.onRemoveAnnotation = { [weak self] in self?.removeAnnotations(range: $0) }
+        rv.onAnnotationTap = { [weak self] id in
+            self?.onAnnotationTap?(id)
+        }
+        rv.onAnnotationEdit = { [weak self] id in
+            self?.onAnnotationEdit?(id)
+        }
+        rv.onBackgroundTap = { [weak self] in
+            self?.onBackgroundTap?()
+        }
         view.addSubview(rv)
         textRenderView = rv
 
@@ -141,6 +175,103 @@ class TextViewControllerTest: UIViewController {
 
         rv.setContentHuggingPriority(.required, for: .vertical)
         rv.setContentCompressionResistancePriority(.required, for: .vertical)
+
+        // 边注指示器画在正文版心之外，必须是一层铺满整页的兄弟视图。
+        // 它不接收触摸，只负责在右侧留白里画几根短条。
+        let margin = AnnotationMarginView(
+            chapterLayout: chapterLayout,
+            pageIndex: pageIndex,
+            margins: margins,
+            annotationState: annotationState,
+            showsIndicators: showsNoteIndicator
+        )
+        margin.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(margin)
+
+        NSLayoutConstraint.activate([
+            margin.topAnchor.constraint(equalTo: view.topAnchor),
+            margin.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            margin.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            margin.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+
+        // 选区手柄：铺满整页，但只在手柄命中区接收触摸。
+        let handles = SelectionHandleOverlayView(
+            chapterLayout: chapterLayout,
+            pageIndex: pageIndex,
+            margins: margins,
+            selectionState: selectionState
+        )
+        handles.translatesAutoresizingMaskIntoConstraints = false
+        handles.onHandleTouchDown = { [weak self] handle, range in
+            self?.onSelectionHandleTouchDown?(handle, range)
+        }
+        handles.onHandleMoved = { [weak self, weak handles] handle, point in
+            guard let self, let handles else { return }
+            self.onSelectionHandleMoved?(handle, handles.convert(point, to: self.view))
+        }
+        handles.onHandleDragEnded = { [weak self] in
+            self?.onSelectionHandleDragEnded?()
+        }
+        view.addSubview(handles)
+        selectionHandleOverlay = handles
+
+        NSLayoutConstraint.activate([
+            handles.topAnchor.constraint(equalTo: view.topAnchor),
+            handles.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            handles.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            handles.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+    }
+
+    // MARK: - Annotation Access
+
+    /// 本章正文。只在选中/取原文时桥接一次，不放进每帧的绘制路径。
+    var chapterText: NSString {
+        chapterLayout.textStorage.string as NSString
+    }
+
+    /// 章节字符数。手柄拖动会高频调用，不能每次都桥接整章文本。
+    var chapterLength: Int {
+        chapterLayout.textStorage.length
+    }
+
+    /// 某个字符区间在本页上的行矩形（**本 VC 的 view 坐标系**）。
+    func rects(for range: NSRange) -> [CGRect] {
+        guard let rv = textRenderView else { return [] }
+        return rv.lineRects(for: range).map { rv.convert($0, to: view) }
+    }
+
+    /// 点中的标注（入参是**本 VC 的 view 坐标系**）。
+    func annotation(at point: CGPoint) -> AnnotationItem? {
+        guard let rv = textRenderView else { return nil }
+        return rv.annotation(at: rv.convert(point, from: view))
+    }
+
+    /// 本页上的一处标注。章内有、但不在本页的返回 nil。
+    func annotation(id: UUID) -> AnnotationItem? {
+        guard let item = annotationState.item(id: id),
+              let pageRange = chapterLayout.characterRange(forPage: pageIndex),
+              NSIntersectionRange(item.range, pageRange).length > 0
+        else { return nil }
+        return item
+    }
+
+    /// 跳转落页后的聚焦提示。
+    func flash(annotationID: UUID) {
+        textRenderView?.flash(annotationID: annotationID)
+    }
+
+    /// 长按选中期间临时关掉正文点按（见 `TextRenderView.setTapEnabled`）。
+    func setTextTapEnabled(_ enabled: Bool) {
+        textRenderView?.setTapEnabled(enabled)
+    }
+
+    /// 某个点（本 VC 的 view 坐标系）是否落在选区手柄上。
+    /// 容器的长按手势据此让路，避免"按住手柄 0.45 秒"又重新选一次词。
+    func containsSelectionHandle(at point: CGPoint) -> Bool {
+        guard let overlay = selectionHandleOverlay else { return false }
+        return overlay.containsHandle(at: overlay.convert(point, from: view))
     }
 
     // MARK: - Font
@@ -315,31 +446,5 @@ class TextViewControllerTest: UIViewController {
     /// 返回 nil = 本章没有这个 id（旧缓存 / 坏书），调用方退回章首。
     func characterOffset(forAnchor anchorID: String) -> Int? {
         chapterLayout.characterOffset(forAnchor: anchorID)
-    }
-
-    // MARK: - Annotation Operations
-
-    private func applyHighlight(range: NSRange) {
-        let highlightColor = UIColor { trait in
-            trait.userInterfaceStyle == .dark
-                ? UIColor.systemYellow.withAlphaComponent(0.40)
-                : UIColor.systemYellow.withAlphaComponent(0.55)
-        }
-        chapterLayout.textStorage.addAttribute(.backgroundColor, value: highlightColor, range: range)
-    }
-
-    private func applyUnderline(range: NSRange) {
-        chapterLayout.textStorage.addAttribute(.underlineStyle,
-                                               value: NSUnderlineStyle.single.rawValue,
-                                               range: range)
-        chapterLayout.textStorage.addAttribute(.underlineColor,
-                                               value: UIColor.systemBlue,
-                                               range: range)
-    }
-
-    private func removeAnnotations(range: NSRange) {
-        chapterLayout.textStorage.removeAttribute(.backgroundColor, range: range)
-        chapterLayout.textStorage.removeAttribute(.underlineStyle,  range: range)
-        chapterLayout.textStorage.removeAttribute(.underlineColor,  range: range)
     }
 }

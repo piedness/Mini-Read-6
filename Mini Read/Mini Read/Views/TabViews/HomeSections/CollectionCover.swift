@@ -19,12 +19,91 @@ enum CoverThumbnail {
     private nonisolated(unsafe) static let cache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 300
+        // 只靠 countLimit 不够：书单拼图与迷你封面只有几 KB，书架封面却是
+        // 600×900 起步的位图（单张约 2.7MB）。两种量级混在同一个缓存里，
+        // 300 条的上限等于没有上限——必须先撞到字节预算才开始回收。
+        cache.totalCostLimit = 96 * 1024 * 1024
+        return cache
+    }()
+
+    /// 封面开本比例的文件头缓存。
+    ///
+    /// 只存一个比例，不存位图：书架卡片要在**首帧**就知道开本，
+    /// 否则骨架与真封面形状不同，图一到位整行高度会跳一下。
+    private nonisolated(unsafe) static let aspectCache: NSCache<NSString, NSNumber> = {
+        let cache = NSCache<NSString, NSNumber>()
+        cache.countLimit = 500
         return cache
     }()
 
     /// 同步命中，用于首帧直接出图。
     nonisolated static func cached(url: URL, maxPixel: CGFloat, aspect: CGFloat) -> UIImage? {
         cache.object(forKey: cacheKey(url, maxPixel, aspect) as NSString)
+    }
+
+    // MARK: 原开本（不裁切）
+
+    /// 书架封面用：保持原图宽高比，只做降采样，不裁切。
+    ///
+    /// 与 `load(url:maxPixel:aspect:)` 分开，是因为书架刻意让每本书以自己的
+    /// 开本出现（见 `BookCardView` 的尺寸策略）；按格子比例裁切会把书名裁掉。
+    nonisolated static func cachedNatural(url: URL, maxPixel: CGFloat) -> UIImage? {
+        cache.object(forKey: naturalKey(url, maxPixel) as NSString)
+    }
+
+    /// 读盘 + 降采样，保持原开本。**不要在主线程调用**。
+    nonisolated static func natural(url: URL, maxPixel: CGFloat) -> UIImage? {
+        let key = naturalKey(url, maxPixel)
+        if let hit = cache.object(forKey: key as NSString) { return hit }
+
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            // 尊重 EXIF 方向：手机拍的封面图可能是侧躺的
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(64, maxPixel)
+        ]
+
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        else { return nil }
+
+        let image = UIImage(cgImage: thumbnail)
+        cache.setObject(image, forKey: key as NSString, cost: byteCost(image))
+        return image
+    }
+
+    /// 开本比例（宽 / 高）。
+    ///
+    /// 只解析文件头拿像素尺寸，**不解码像素**——比 `natural(...)` 便宜两个数量级，
+    /// 因此可以放心在 `body` 里同步调用（首次之后全是字典命中）。
+    /// 返回 `nil` 表示文件读不出来，调用方自行回退。
+    nonisolated static func aspect(url: URL) -> CGFloat? {
+        let key = url.path as NSString
+        if let hit = aspectCache.object(forKey: key) { return CGFloat(hit.doubleValue) }
+
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        else { return nil }
+
+        let width  = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue ?? 0
+        let height = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue ?? 0
+        guard width > 0, height > 0 else { return nil }
+
+        // EXIF 方向 5–8 表示旋转了 90°：宽高要对调，否则横竖会判断反
+        let orientation = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+        let rotated = (5...8).contains(orientation)
+        let aspect = CGFloat(rotated ? height / width : width / height)
+
+        aspectCache.setObject(NSNumber(value: Double(aspect)), forKey: key)
+        return aspect
+    }
+
+    /// 解码后的真实字节数，作为 `NSCache` 的 cost。
+    private nonisolated static func byteCost(_ image: UIImage) -> Int {
+        guard let cgImage = image.cgImage else { return 1 }
+        return max(1, cgImage.bytesPerRow * cgImage.height)
     }
 
     /// 读盘 + 降采样 + 顶部对齐裁切。**不要在主线程调用**。
@@ -46,7 +125,7 @@ enum CoverThumbnail {
         else { return nil }
 
         let image = UIImage(cgImage: crop(thumbnail, to: aspect))
-        cache.setObject(image, forKey: key as NSString)
+        cache.setObject(image, forKey: key as NSString, cost: byteCost(image))
         return image
     }
 
@@ -76,9 +155,17 @@ enum CoverThumbnail {
     /// 像素尺寸按 64 的整数倍归档、比例按 0.01 归档，避免同一张封面因
     /// 首页/详情页尺寸略有差异而在缓存里留下多份。
     private nonisolated static func cacheKey(_ url: URL, _ maxPixel: CGFloat, _ aspect: CGFloat) -> String {
-        let bucket = max(64, Int((maxPixel / 64).rounded(.up)) * 64)
         let aspectBucket = Int((min(max(aspect, 0.05), 20) * 100).rounded())
-        return "\(url.path)#\(bucket)#\(aspectBucket)"
+        return "\(url.path)#\(pixelBucket(maxPixel))#\(aspectBucket)"
+    }
+
+    /// 原开本那条通道的键。带 `natural` 标记，与裁切通道不会撞键。
+    private nonisolated static func naturalKey(_ url: URL, _ maxPixel: CGFloat) -> String {
+        "\(url.path)#natural#\(pixelBucket(maxPixel))"
+    }
+
+    private nonisolated static func pixelBucket(_ maxPixel: CGFloat) -> Int {
+        max(64, Int((maxPixel / 64).rounded(.up)) * 64)
     }
 }
 
@@ -161,15 +248,19 @@ struct CoverThumbnailView: View {
     }
 }
 
-/// 列表行左侧的迷你封面（34×48），与书单拼图共用降采样缓存。
+/// 列表行左侧的迷你封面（默认 34×48），与书单拼图共用降采样缓存。
+///
+/// 尺寸可调：元数据编辑列表要 40×58 —— 那一屏就是用来"认封面"的，
+/// 34pt 宽缩略图太小，用户只能退化成靠书名找书。其余调用点保持默认值不变。
 struct MiniCover: View {
 
     let book: bookItem
+    var size: CGSize = CGSize(width: 34, height: 48)
 
     var body: some View {
         CoverThumbnailView(
             url: book.coverImageURLs.first,
-            size: CGSize(width: 34, height: 48),
+            size: size,
             cornerRadius: 4
         )
     }

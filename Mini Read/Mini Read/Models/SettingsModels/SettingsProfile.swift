@@ -200,10 +200,6 @@ enum SettingsProfileSchema {
         field("watermarkEnabled", \.watermarkEnabled),
         field("watermarkText", \.watermarkText),
 
-        // 8. 隐私与安全
-        field("hideReadingHistory", \.hideReadingHistory),
-        field("enablePrivateShelf", \.enablePrivateShelf),
-
         // 10. 系统设置
         field("appLanguage", \.appLanguage),
         field("dateFormat", \.dateFormat),
