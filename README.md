@@ -1,5 +1,7 @@
 ## Reading App for mini ： 一款为iPad mini 设计开发的本地EPUB电子书阅读器
 
+> 贡献模型：DeepSeek v4pro/v4.1flash、Claude 3.5/5.5、Hy4
+
 ## 已实现功能:
 
 ### 书库
