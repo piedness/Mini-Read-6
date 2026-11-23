@@ -1,0 +1,202 @@
+
+name: Build and Release Mini-Read
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Unsigned IPA
+    runs-on: macos-15
+
+    steps:
+      # 1. 获取源码
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. 检查 Xcode 环境
+      - name: Setup Xcode
+        run: |
+          xcodebuild -version
+          swift --version
+
+      # 3. 自动查找 Xcode 工程和 Scheme
+      - name: Detect Xcode Project and Scheme
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT=$(find . -maxdepth 5 \
+            -name "*.xcodeproj" \
+            -not -path "*/Pods/*" \
+            -print -quit)
+
+          if [ -z "$PROJECT" ]; then
+            echo "::error::No Xcode project found"
+            exit 1
+          fi
+
+          echo "Project: $PROJECT"
+
+          xcodebuild -list -json \
+            -project "$PROJECT" \
+            > "$RUNNER_TEMP/xcode-list.json"
+
+          PROJECT_NAME=$(basename "$PROJECT" .xcodeproj)
+
+          SCHEME=$(python3 - "$RUNNER_TEMP/xcode-list.json" "$PROJECT_NAME" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1]) as f:
+              data = json.load(f)
+
+          project = data.get("project", {})
+          schemes = project.get("schemes", [])
+
+          if not schemes:
+              raise SystemExit("No shared Xcode schemes found. Share the App scheme in Xcode first.")
+
+          preferred = sys.argv[2]
+
+          if preferred in schemes:
+              print(preferred)
+          else:
+              print(schemes[0])
+          PY
+          )
+
+          echo "Selected Scheme: $SCHEME"
+
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+
+      # 4. 根据 Tag 获取版本号
+      - name: Set Version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag must follow vX.Y.Z format"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+          echo "Release version: $VERSION"
+
+      # 5. 编译 iOS App（不签名）
+      - name: Build iOS App
+        env:
+          PROJECT: ${{ steps.detect.outputs.project }}
+          SCHEME: ${{ steps.detect.outputs.scheme }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build }}
+        run: |
+          set -o pipefail
+
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build \
+            | tee "$RUNNER_TEMP/build.log"
+
+      # 6. 打包 IPA
+      - name: Package Unsigned IPA
+        run: |
+          set -euo pipefail
+
+          APP_DIR="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos"
+
+          mkdir -p dist/Payload
+
+          APP_PATH=""
+
+          for APP in "$APP_DIR"/*.app; do
+            [ -d "$APP" ] || continue
+
+            PACKAGE_TYPE=$(/usr/libexec/PlistBuddy \
+              -c "Print CFBundlePackageType" \
+              "$APP/Info.plist" 2>/dev/null || true)
+
+            if [ "$PACKAGE_TYPE" = "APPL" ]; then
+              APP_PATH="$APP"
+              break
+            fi
+          done
+
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No application bundle found"
+            exit 1
+          fi
+
+          echo "App: $APP_PATH"
+
+          cp -R "$APP_PATH" dist/Payload/
+
+          cd dist
+
+          /usr/bin/zip -qry Mini-Read.ipa Payload
+
+          # 验证 IPA
+          unzip -t Mini-Read.ipa
+
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy \
+            -c "Print CFBundleIdentifier" \
+            "Payload/$(basename "$APP_PATH")/Info.plist")
+
+          echo "Bundle Identifier: $BUNDLE_ID"
+
+          if [ -z "$BUNDLE_ID" ]; then
+            echo "::error::Bundle Identifier is empty"
+            exit 1
+          fi
+
+          echo "bundle_id=$BUNDLE_ID" >> "$GITHUB_ENV"
+
+          # 生成安装说明
+          cat > INSTALL.txt <<EOF
+          Mini-Read ${{ steps.version.outputs.version }}
+
+          Bundle ID: $BUNDLE_ID
+
+          This IPA is unsigned.
+
+          Installation:
+          1. Download Mini-Read.ipa
+          2. Open AltStore or Sideloadly on your computer.
+          3. Sign the IPA using your own Apple ID.
+          4. Install it on your iPhone or iPad.
+
+          A free Apple ID signature normally expires after 7 days.
+          EOF
+
+      # 7. 上传 GitHub Release
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Mini-Read ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/Mini-Read.ipa
+            dist/INSTALL.txt
