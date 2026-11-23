@@ -12,17 +12,41 @@ permissions:
 jobs:
   build:
     name: Build Unsigned IPA
-    runs-on: macos-15
+    runs-on: macos-26
 
     steps:
       # 1. 获取源码
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. 检查 Xcode 环境
-      - name: Setup Xcode
+      # 2. 选择 Xcode 26
+      #    项目用了 iOS 26 SDK 的 API（glassEffect / Glass）和 Icon Composer 的
+      #    miniread.icon 图标，Xcode 16 的 actool 不认识 .icon，会直接报
+      #    "None of the input catalogs contained a matching app icon set named miniread"
+      #    并让 CompileAssetCatalogVariant 失败。
+      - name: Select Xcode 26
+        shell: bash
         run: |
+          set -euo pipefail
+
+          CURRENT=$(xcodebuild -version | awk '/^Xcode/ {print $2}')
+          MAJOR=${CURRENT%%.*}
+
+          if [ "$MAJOR" -lt 26 ]; then
+            XCODE_APP=$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | sort | tail -1 || true)
+
+            if [ -z "$XCODE_APP" ]; then
+              echo "::error::This runner has no Xcode 26+ installed"
+              ls -d /Applications/Xcode*.app
+              exit 1
+            fi
+
+            echo "Switching from Xcode $CURRENT to $XCODE_APP"
+            sudo xcode-select -s "$XCODE_APP"
+          fi
+
           xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos
           swift --version
 
       # 3. 自动查找 Xcode 工程和 Scheme
