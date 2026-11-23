@@ -179,26 +179,14 @@ enum SettingsProfileSchema {
         field("imageCacheQuality", \.imageCacheQuality),
         field("autoCleanCache", \.autoCleanCache),
 
-        // 3. 笔记与标注 - 高亮与标注
+        // 3. 笔记与标注
         field("defaultHighlightColor", \.defaultHighlightColor),
         field("highlightOpacity", \.highlightOpacity),
         field("defaultAnnotationStyle", \.defaultAnnotationStyle),
-        field("longPressAction", \.longPressAction),
-        field("doubleTapAction", \.doubleTapAction),
+        field("annotationLineWeight", \.annotationLineWeight),
         field("showNoteIndicators", \.showNoteIndicators),
-
-        // 3. 笔记与标注 - 笔记系统
-        field("noteDisplayPosition", \.noteDisplayPosition),
-        field("noteBubbleStyle", \.noteBubbleStyle),
+        field("noteIndicatorStyle", \.noteIndicatorStyle),
         field("showNoteCount", \.showNoteCount),
-
-        // 3. 笔记与标注 - 导出与分享
-        field("exportFormat", \.exportFormat),
-        field("includeOriginalText", \.includeOriginalText),
-        field("includeMetadata", \.includeMetadata),
-        field("exportByChapter", \.exportByChapter),
-        field("watermarkEnabled", \.watermarkEnabled),
-        field("watermarkText", \.watermarkText),
 
         // 10. 系统设置
         field("appLanguage", \.appLanguage),

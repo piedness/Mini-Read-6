@@ -85,26 +85,17 @@ final class AppSettings {
     var imageCacheQuality: String = "standard"
     var autoCleanCache: Bool = true
 
-    // 3. 笔记与标注 - 高亮与标注
+    // 3. 笔记与标注
     var defaultHighlightColor: String = "yellow"
     var highlightOpacity: Double = 0.3
     var defaultAnnotationStyle: String = "highlight"
-    var longPressAction: String = "highlight"
-    var doubleTapAction: String = "select"
+    /// 线条粗细档位（见 `AnnotationLineWeight`）：只影响下划线 / 波浪线 / 删除线。
+    var annotationLineWeight: String = "standard"
     var showNoteIndicators: Bool = true
-
-    // 3. 笔记与标注 - 笔记系统
-    var noteDisplayPosition: String = "sidebar"
-    var noteBubbleStyle: String = "standard"
+    /// 边注指示器样式（见 `NoteIndicatorStyle`）。
+    var noteIndicatorStyle: String = "bar"
+    /// 目录面板页签上是否显示标注数量。
     var showNoteCount: Bool = true
-
-    // 3. 笔记与标注 - 导出与分享
-    var exportFormat: String = "markdown"
-    var includeOriginalText: Bool = true
-    var includeMetadata: Bool = true
-    var exportByChapter: Bool = false
-    var watermarkEnabled: Bool = false
-    var watermarkText: String = ""
 
     // 10. 系统设置
     var appLanguage: String = "system"
@@ -386,26 +377,14 @@ extension AppSettings {
         imageCacheQuality = "standard"
         autoCleanCache    = true
 
-        // 3. 笔记与标注 - 高亮与标注
+        // 3. 笔记与标注
         defaultHighlightColor  = "yellow"
         highlightOpacity       = 0.3
         defaultAnnotationStyle = "highlight"
-        longPressAction        = "highlight"
-        doubleTapAction        = "select"
+        annotationLineWeight   = "standard"
         showNoteIndicators     = true
-
-        // 3. 笔记与标注 - 笔记系统
-        noteDisplayPosition = "sidebar"
-        noteBubbleStyle     = "standard"
-        showNoteCount       = true
-
-        // 3. 笔记与标注 - 导出与分享
-        exportFormat        = "markdown"
-        includeOriginalText = true
-        includeMetadata     = true
-        exportByChapter     = false
-        watermarkEnabled    = false
-        watermarkText       = ""
+        noteIndicatorStyle     = "bar"
+        showNoteCount          = true
 
         // 10. 系统设置
         appLanguage    = "system"

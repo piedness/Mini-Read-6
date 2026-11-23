@@ -14,8 +14,6 @@ enum SettingsRoute: Hashable, CaseIterable {
     case storage
     // 笔记与标注
     case highlight
-    case noteSystem
-    case exportShare
     // 系统设置
     case customize
     case general
@@ -63,9 +61,7 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
             ]
         case .notes:
             return [
-                SettingsItem(route: .highlight,   label: "高亮与标注", icon: "highlighter",          iconColor: .yellow),
-                SettingsItem(route: .noteSystem,  label: "笔记系统",   icon: "note.text",            iconColor: .orange),
-                SettingsItem(route: .exportShare, label: "导出与分享", icon: "square.and.arrow.up.fill", iconColor: .blue)
+                SettingsItem(route: .highlight,   label: "高亮与标注", icon: "highlighter",          iconColor: .yellow)
             ]
         case .other:
             return [
@@ -293,8 +289,6 @@ struct SettingsView: View {
         case .importFormat:    ImportFormatSettingsView(settings: appSettings)
         case .storage:         StorageSettingsView(settings: appSettings)
         case .highlight:       HighlightSettingsView(settings: appSettings)
-        case .noteSystem:      NoteSystemSettingsView(settings: appSettings)
-        case .exportShare:     ExportShareSettingsView(settings: appSettings)
         case .general:         GeneralSettingsView(settings: appSettings)
         case .performance:     PerformanceSettingsView(settings: appSettings)
         case .about:           AboutView()

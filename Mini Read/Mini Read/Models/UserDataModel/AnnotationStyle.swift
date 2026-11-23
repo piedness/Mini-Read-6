@@ -117,3 +117,58 @@ enum AnnotationColor: String, CaseIterable, Identifiable, Sendable {
             .withTintColor(uiColor, renderingMode: .alwaysOriginal)
     }
 }
+
+// MARK: - 线条粗细
+
+/// 下划线 / 波浪线 / 删除线的粗细档位。
+///
+/// 存档位而不是具体磅值：三种样式的基础线宽本就不同（删除线 1.3pt、下划线
+/// 3pt），用倍率让它们一起变粗而不破坏彼此的比例；档位名也比数字好选。
+enum AnnotationLineWeight: String, CaseIterable, Identifiable, Sendable {
+
+    case thin
+    case standard
+    case thick
+
+    var id: String { rawValue }
+
+    /// 相对基础线宽的倍率（基础值见 `AnnotationMetrics`）。
+    var scale: CGFloat {
+        switch self {
+        case .thin:     return 0.7
+        case .standard: return 1
+        case .thick:    return 1.45
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .thin:     return "细"
+        case .standard: return "标准"
+        case .thick:    return "粗"
+        }
+    }
+}
+
+// MARK: - 边注指示器
+
+/// 右侧留白里「这条标注有笔记」的指示标记样式。
+///
+/// 只对带笔记的标注显示（纯高亮不画），因此没有「无」这一档——
+/// 不显示由 `AppSettings.showNoteIndicators` 统一关掉。
+enum NoteIndicatorStyle: String, CaseIterable, Identifiable, Sendable {
+
+    /// 短竖条（默认）：与行高无关，一眼能数出有几条笔记。
+    case bar
+    /// 圆点：更轻，靠近书口的留白更干净。
+    case dot
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .bar: return "竖条"
+        case .dot: return "圆点"
+        }
+    }
+}

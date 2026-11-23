@@ -292,9 +292,6 @@ final class ViewController: UIViewController,
     /// 选区必须留着给手柄继续调。
     private var isAdjustingSelection = false
 
-    /// 长按落在已有标注上：抬手后打开编辑页，而不是弹操作菜单。
-    private var pendingEditorAnnotationID: UUID?
-
     /// 菜单展示/退场的计数。
     ///
     /// 只用一个 bool 会在"手柄按下 → 菜单退场动画还没结束 → 手柄已经抬起
@@ -2689,36 +2686,23 @@ final class ViewController: UIViewController,
             // 刚弹出的菜单会被"点空白"立刻清掉。
             setTextTapEnabled(false)
             guard let (textVC, charIdx) = hitTestText(at: point) else {
-                pendingEditorAnnotationID = nil
                 finishSelectionAction()
                 return
             }
 
-            // 长按已有标注：选中它的整段，抬手后打开编辑页。
-            // 长按空白正文：才走"选词 + 弹操作菜单"的路径。
-            if let annotation = textVC.annotationState.item(atCharacter: charIdx) {
-                pendingEditorAnnotationID = annotation.id
-                selectionSrc = findLocation(of: textVC)?.src
+            // 长按一律走"选句 + 弹操作菜单"。编辑已有笔记改由右侧的笔记指示器
+            // 触发（见 `AnnotationMarginView.onIndicatorTap`）：长按落在标注上时
+            // 读者多半只是想重新选这句话，直接弹编辑页反而挡路。
 
-                let state = textVC.selectionState
-                state.startIndex = annotation.range.location
-                state.endIndex = NSMaxRange(annotation.range)
-                activeSelection = nil
-
-                triggerHaptic(.medium)
-                return
-            }
-
-            pendingEditorAnnotationID = nil
-
-            // 长按先选中一个"词/短语"，而不是单个字符：中文没有空格，
-            // 单个字符既不好点中，也不符合"我要标这一句"的意图。
-            let wordRange = wordRange(at: charIdx, in: textVC)
-            sharedSelectionAnchor = wordRange.location
+            // 长按默认选中"一句"（到句号收尾），而不是"一个逗号分句"：
+            // 中文没有空格，读者长按的意图几乎总是"标下这一句"。
+            // 句界判定、段落边界与无句号段落的兜底都在 SentenceRangeResolver 里。
+            let initialRange = SentenceRangeResolver.sentenceRange(at: charIdx, in: textVC.chapterText)
+            sharedSelectionAnchor = initialRange.location
 
             let state = textVC.selectionState
-            state.startIndex = wordRange.location
-            state.endIndex = NSMaxRange(wordRange)
+            state.startIndex = initialRange.location
+            state.endIndex = NSMaxRange(initialRange)
             selectionSrc = findLocation(of: textVC)?.src
             activeSelection = nil
 
@@ -2728,9 +2712,6 @@ final class ViewController: UIViewController,
             triggerHaptic(.medium)
 
         case .changed:
-            // 长按在标注上：这一段只用于"打开编辑页"，不跟着手指改范围。
-            guard pendingEditorAnnotationID == nil else { return }
-
             guard let selectionSrc,
                   let (textVC, charIdx) = hitTestText(at: point),
                   let location = findLocation(of: textVC),
@@ -2746,16 +2727,6 @@ final class ViewController: UIViewController,
             state.endIndex = e
 
         case .ended:
-            // 长按标注：抬手后打开编辑页。
-            if let id = pendingEditorAnnotationID {
-                pendingEditorAnnotationID = nil
-                finishSelectionAction()
-                DispatchQueue.main.async { [weak self] in
-                    self?.onAnnotationActivate?(id)
-                }
-                return
-            }
-
             // 抬手才取原文：拖动期间只画选中，不做整章文本桥接。
             guard let src = selectionSrc,
                   let textVC = visibleTextController(for: src),
@@ -2798,70 +2769,6 @@ final class ViewController: UIViewController,
             }
         }
         return nil
-    }
-
-    /// 把落点扩成一个词/短语。
-    ///
-    /// 用**有界局部扫描**（向两侧最多 48 个字符，遇空白或标点停），
-    /// 不用 `NLTokenizer` 全章分词：三十万字的章节在主线程上分词会明显卡顿，
-    /// 而长按只需要一个"看起来合理"的初始范围，读者还可以继续拖。
-    private func wordRange(at index: Int, in textVC: TextViewControllerTest) -> NSRange {
-        let text = textVC.chapterText
-        guard text.length > 0 else { return NSRange(location: 0, length: 0) }
-
-        let idx = min(max(0, index), text.length - 1)
-        let terminators = CharacterSet.whitespacesAndNewlines
-            .union(.punctuationCharacters)
-
-        func cluster(at i: Int) -> NSRange {
-            text.rangeOfComposedCharacterSequence(at: min(max(0, i), text.length - 1))
-        }
-        func isBoundary(at i: Int) -> Bool {
-            guard i >= 0, i < text.length else { return true }
-            let piece = text.substring(with: cluster(at: i))
-            return piece.unicodeScalars.allSatisfy { terminators.contains($0) }
-        }
-
-        // 长按落在空白/标点上时，向前/后找一个最近的实字作为种子。
-        // 否则会先选中一个空格，裁剪后又变成空选区，读者按了半天没有反应。
-        var seed = idx
-        if isBoundary(at: idx) {
-            var distance = 1
-            while distance <= 24 {
-                if idx + distance < text.length, !isBoundary(at: idx + distance) {
-                    seed = idx + distance
-                    break
-                }
-                if idx - distance >= 0, !isBoundary(at: idx - distance) {
-                    seed = idx - distance
-                    break
-                }
-                distance += 1
-            }
-        }
-
-        var start = cluster(at: seed).location
-        var steps = 0
-        while start > 0, steps < 48 {
-            let previous = cluster(at: start - 1)
-            guard !isBoundary(at: previous.location) else { break }
-            start = previous.location
-            steps += 1
-        }
-
-        var end = NSMaxRange(cluster(at: seed))
-        steps = 0
-        while end < text.length, steps < 48 {
-            let next = cluster(at: end)
-            guard !isBoundary(at: next.location) else { break }
-            end = NSMaxRange(next)
-            steps += 1
-        }
-
-        if end <= start {
-            end = min(text.length, start + 1)
-        }
-        return NSRange(location: start, length: end - start)
     }
 
     /// 把字符区间包装成可跨层传递的选中结果（裁剪空白 + 取原文）。
@@ -2955,9 +2862,9 @@ final class ViewController: UIViewController,
 
     /// 单击标注：选中它的整段并弹出操作菜单。
     ///
-    /// 与长按的分工：
-    /// - 单击 = 选中 + 菜单（高亮、添加笔记、颜色、移除……）；
-    /// - 长按 = 打开「编辑标注」页。
+    /// 两个入口分工：
+    /// - 点正文里的标注 = 选中 + 菜单（高亮、添加笔记、颜色、移除……）；
+    /// - 点右侧的笔记指示器 = 打开「编辑标注」页（见 `AnnotationMarginView`）。
     private func handleAnnotationTap(_ id: UUID) {
         guard let textVC = pageVC?.viewControllers?
             .compactMap({ $0 as? TextViewControllerTest })
@@ -3135,7 +3042,7 @@ final class ViewController: UIViewController,
         let point = touch.location(in: view)
 
         if gestureRecognizer === selectionGesture {
-            // 按在手柄上时不要重新选词：手柄有自己的拖动识别器，
+            // 按在手柄上时不要重新选句：手柄有自己的拖动识别器，
             // 两个长按同时跑会把选区来回重置。
             return !isPointOnSelectionHandle(point)
         }
@@ -3213,7 +3120,6 @@ final class ViewController: UIViewController,
     private func finishSelectionAction() {
         isAdjustingSelection = false
         expectsSelectionMenu = false
-        pendingEditorAnnotationID = nil
         clearSelection()
         setPageCurlGesturesEnabled(true)
         setPageTurnTapGesturesEnabled(true)
@@ -3302,8 +3208,27 @@ final class ViewController: UIViewController,
             }
         )
 
+        // 一键按默认样式 + 默认颜色标注，省掉"展开样式子菜单再选一项"的两步。
+        //
+        // 选区与已有标注重叠时**不给**这一条：`addAnnotation` 对重叠选区是
+        // "改写样式/颜色"而不是新增（见 ContentsPanelViewModel），标题写
+        // "添加"会误导；这种时候样式/颜色子菜单已经能改，末尾还有「移除标注」。
+        let addAnnotation: UIAction? = existing == nil
+            ? UIAction(
+                title: "添加标注",
+                // 图标跟随默认样式，读者按下去之前就知道会画成高亮还是下划线。
+                image: UIImage(systemName: defaultStyle.systemImage)
+            ) { [weak self] _ in
+                self?.onHighlightSelection?(selection, defaultStyle, defaultColor)
+                self?.finishSelectionAction()
+            }
+            : nil
+
         let note = UIAction(
-            title: "添加笔记",
+            // 已有笔记时这条实际是"打开编辑页"（见 BookContent 的 onNoteSelection）。
+            // 编辑的指针入口已经移到右侧指示器，菜单里这条是关掉指示器后的退路，
+            // 标题必须说清楚它会把原笔记一起带出来。
+            title: existing?.hasNote == true ? "编辑笔记" : "添加笔记",
             image: UIImage(systemName: "note.text")
         ) { [weak self] _ in
             // 先收掉选中与菜单，再让 SwiftUI 弹 sheet：菜单还在退场时
@@ -3333,15 +3258,20 @@ final class ViewController: UIViewController,
             }
         }
 
-        // 分组布局：外观（样式/颜色）→ 笔记与分享 → 危险操作。
-        // 用 inline section 让系统自动画分隔线，而不是把 7 个动作平铺成一行行。
+        // 分组布局：外观（样式/颜色）→ 添加标注 / 笔记与分享 → 危险操作。
+        // 用 inline section 让系统自动画分隔线，而不是把动作平铺成一行行。
         let appearanceSection = UIMenu(
             options: .displayInline,
             children: [styleMenu, colorMenu]
         )
+        var utilityItems: [UIMenuElement] = []
+        if let addAnnotation {
+            utilityItems.append(addAnnotation)
+        }
+        utilityItems.append(contentsOf: [note, copy, share])
         let utilitySection = UIMenu(
             options: .displayInline,
-            children: [note, copy, share]
+            children: utilityItems
         )
 
         var sections: [UIMenuElement] = [appearanceSection, utilitySection]
@@ -3377,7 +3307,6 @@ final class ViewController: UIViewController,
             // 只要还有"正在拖手柄 / 本次退场是手柄引起 / 新菜单已排队或已呈现"
             // 中的任一种，就不能恢复翻页手势、也不能清选区。
             let keepSelection = self.isAdjustingSelection
-                || self.pendingEditorAnnotationID != nil
                 || wasHandleDismissal
                 || self.expectsSelectionMenu
                 || self.isSelectionMenuPresented

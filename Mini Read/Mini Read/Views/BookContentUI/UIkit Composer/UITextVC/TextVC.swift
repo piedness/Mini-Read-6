@@ -29,13 +29,15 @@ class TextViewControllerTest: UIViewController {
     /// 本章共享的标注投影。同一章的每一页拿到的是同一个实例。
     let annotationState: ChapterAnnotationState
 
-    /// 高亮透明度与边注指示器开关。属于绘制参数，不参与分页。
+    /// 标注透明度、线条粗细与边注指示器。属于绘制参数，不参与分页。
     private let highlightOpacity: CGFloat
+    private let annotationLineWeight: AnnotationLineWeight
     private let showsNoteIndicator: Bool
+    private let noteIndicatorStyle: NoteIndicatorStyle
 
     /// 读者点中标注：选中该标注并弹出操作菜单。
     var onAnnotationTap: ((UUID) -> Void)?
-    /// 长按标注：打开编辑页。
+    /// 点笔记指示器（或 VoiceOver 自定义动作）：打开编辑页。
     var onAnnotationEdit: ((UUID) -> Void)?
     /// 点在正文空白处（未命中标注）时上报。
     var onBackgroundTap: (() -> Void)?
@@ -86,7 +88,9 @@ class TextViewControllerTest: UIViewController {
         self.selectionState  = selectionState ?? SelectionState()
         self.annotationState = annotationState
         self.highlightOpacity = CGFloat(settings.highlightOpacity)
+        self.annotationLineWeight = AnnotationLineWeight(rawValue: settings.annotationLineWeight) ?? .standard
         self.showsNoteIndicator = settings.showNoteIndicators
+        self.noteIndicatorStyle = NoteIndicatorStyle(rawValue: settings.noteIndicatorStyle) ?? .bar
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -151,7 +155,8 @@ class TextViewControllerTest: UIViewController {
             pageIndex: pageIndex,
             selectionState: selectionState,
             annotationState: annotationState,
-            highlightOpacity: highlightOpacity
+            highlightOpacity: highlightOpacity,
+            annotationLineWeight: annotationLineWeight
         )
         rv.translatesAutoresizingMaskIntoConstraints = false
         rv.onAnnotationTap = { [weak self] id in
@@ -177,14 +182,21 @@ class TextViewControllerTest: UIViewController {
         rv.setContentCompressionResistancePriority(.required, for: .vertical)
 
         // 边注指示器画在正文版心之外，必须是一层铺满整页的兄弟视图。
-        // 它不接收触摸，只负责在右侧留白里画几根短条。
+        // 它只在指示器的命中区里接收触摸（见 `AnnotationMarginView.point(inside:)`），
+        // 其余位置照常透给正文与翻页手势。
         let margin = AnnotationMarginView(
             chapterLayout: chapterLayout,
             pageIndex: pageIndex,
             margins: margins,
             annotationState: annotationState,
-            showsIndicators: showsNoteIndicator
+            showsIndicators: showsNoteIndicator,
+            indicatorStyle: noteIndicatorStyle
         )
+        // 点右侧的笔记指示器 = 打开编辑页。这是编辑已有笔记的唯一指针入口：
+        // 长按正文一律只做选区（见 `MainViewController.handleSelectionLongPress`）。
+        margin.onIndicatorTap = { [weak self] id in
+            self?.onAnnotationEdit?(id)
+        }
         margin.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(margin)
 

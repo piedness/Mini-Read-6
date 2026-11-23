@@ -33,8 +33,10 @@ final class TextRenderView: UIView, AnnotationStateObserver, SelectionStateObser
     let selectionState: SelectionState
     let annotationState: ChapterAnnotationState
 
-    /// 全局高亮透明度（设置 → 高亮与标注）。
+    /// 全局标注透明度（设置 → 高亮与标注）。
     private let highlightOpacity: CGFloat
+    /// 线条粗细档位（设置 → 高亮与标注）。只影响下划线 / 波浪线 / 删除线。
+    private let annotationLineWeight: AnnotationLineWeight
 
     private var container: NSTextContainer { chapterLayout.pageContainers[pageIndex] }
     private var layoutManager: NSLayoutManager  { chapterLayout.layoutManager }
@@ -46,7 +48,8 @@ final class TextRenderView: UIView, AnnotationStateObserver, SelectionStateObser
 
     /// 读者点中一处标注：选中该标注并弹出操作菜单。
     var onAnnotationTap: ((UUID) -> Void)?
-    /// 长按标注（或 VoiceOver 自定义动作）：打开编辑页。
+    /// 打开编辑页。指针入口已移到右侧的笔记指示器（见 `AnnotationMarginView`），
+    /// 这里只剩 VoiceOver 的「编辑标注」自定义动作在用。
     var onAnnotationEdit: ((UUID) -> Void)?
     /// 点在正文空白处（未命中标注）。由容器决定是切换阅读控件还是取消选中。
     var onBackgroundTap: (() -> Void)?
@@ -69,13 +72,15 @@ final class TextRenderView: UIView, AnnotationStateObserver, SelectionStateObser
         pageIndex: Int,
         selectionState: SelectionState,
         annotationState: ChapterAnnotationState,
-        highlightOpacity: CGFloat
+        highlightOpacity: CGFloat,
+        annotationLineWeight: AnnotationLineWeight = .standard
     ) {
         self.chapterLayout    = chapterLayout
         self.pageIndex        = pageIndex
         self.selectionState   = selectionState
         self.annotationState  = annotationState
         self.highlightOpacity = highlightOpacity
+        self.annotationLineWeight = annotationLineWeight
         super.init(frame: .zero)
         backgroundColor = .clear
         isOpaque = false
@@ -159,7 +164,8 @@ final class TextRenderView: UIView, AnnotationStateObserver, SelectionStateObser
                 item,
                 rects: rects,
                 lineGeometries: geometries,
-                opacity: highlightOpacity,
+                fillOpacity: highlightOpacity,
+                lineWeight: annotationLineWeight,
                 in: context
             )
 

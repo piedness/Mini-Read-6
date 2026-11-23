@@ -22,6 +22,11 @@ private enum AnnotationMetrics {
     static let minOpacity: CGFloat = 0.05
     static let maxOpacity: CGFloat = 0.9
     static let minimumDrawableSide: CGFloat = 0.5
+    /// 线条类标注的不透明度。
+    ///
+    /// 与「底色透明度」分开：线条是描边不是色块，让它跟着底色一起变淡
+    /// 只会把下划线调成一根灰线。粗细由 `AnnotationLineWeight` 单独控制。
+    static let lineAlpha: CGFloat = 0.85
 
     // 高亮底色
     static let highlightHorizontalExpansion: CGFloat = 2
@@ -31,16 +36,13 @@ private enum AnnotationMetrics {
     // 下划线
     /// 基线往下偏移多少（pt）。想更贴字就调小，想更往下就调大。
     static let underlineOffset: CGFloat = 10
-    /// 线宽（pt）。
+    /// 线宽（pt）。实际绘制时乘 `AnnotationLineWeight.scale`。
     static let underlineWidth: CGFloat = 3
-    /// 在底色透明度上再加多少，让线条比底色更实。
-    static let underlineAlphaBoost: CGFloat = 0.45
     /// 没有基线几何时的兜底：从行框底部往上收多少。
     static let fallbackBaselineInset: CGFloat = 2
 
     // 波浪线
     static let wavyOffset: CGFloat = 10
-    static let wavyAlphaBoost: CGFloat = 0.45
     static let wavyAmplitude: CGFloat = 2.5
     static let wavyHalfWave: CGFloat = 8
     static let wavyControlFactor: CGFloat = 1.6
@@ -48,7 +50,6 @@ private enum AnnotationMetrics {
 
     // 删除线
     static let strikethroughWidth: CGFloat = 1.3
-    static let strikethroughAlphaBoost: CGFloat = 0.35
     /// 删除线位于基线上方 `xHeight × factor` 处。
     static let strikethroughOffsetFactor: CGFloat = 0.5
 
@@ -63,9 +64,13 @@ private enum AnnotationMetrics {
     // 边注指示条
     static let marginBarWidth: CGFloat = 3
     static let marginBarHeight: CGFloat = 11
+    /// 圆点样式的直径。比竖条宽一点才不至于看起来是个脏点。
+    static let marginDotDiameter: CGFloat = 6
     static let marginMinimumInset: CGFloat = 7
     static let marginInsetFactor: CGFloat = 0.55
     static let marginBarAlpha: CGFloat = 0.8
+    /// 指示器的触控高度（HIG 最小 44pt）。横向只铺满留白，见 `AnnotationMarginView.hitBox`。
+    static let marginHitHeight: CGFloat = 44
 }
 
 // MARK: - 绘制
@@ -78,16 +83,20 @@ enum AnnotationDrawing {
     ///   - rects: 该标注在当前页上的行矩形（`TextRenderView` 坐标系）。
     ///   - lineGeometries: 逐行基线几何。下划线/波浪线/删除线必须按基线画，
     ///     不能用行矩形底部——那是行框底部，含行距与 descender，会沉下去。
-    ///   - opacity: 全局高亮透明度（设置项）。
+    ///   - fillOpacity: 底色高亮的透明度（设置项）。只作用于 `.highlight`，
+    ///     线条类标注用固定的 `AnnotationMetrics.lineAlpha`，不随它变淡。
+    ///   - lineWeight: 线条粗细档位（设置项）。只对下划线 / 波浪线 / 删除线生效。
     static func draw(
         _ item: AnnotationItem,
         rects: [CGRect],
         lineGeometries: [ChapterLayout.LineFragmentGeometry] = [],
-        opacity: CGFloat,
+        fillOpacity: CGFloat,
+        lineWeight: AnnotationLineWeight = .standard,
         in context: CGContext
     ) {
         guard !rects.isEmpty else { return }
-        let clampedOpacity = max(AnnotationMetrics.minOpacity, min(AnnotationMetrics.maxOpacity, opacity))
+        let clampedOpacity = max(AnnotationMetrics.minOpacity, min(AnnotationMetrics.maxOpacity, fillOpacity))
+        let lineScale = lineWeight.scale
         let color = item.color.uiColor
 
         switch item.style {
@@ -118,11 +127,9 @@ enum AnnotationDrawing {
             }
 
         case .underline:
-            let stroke = color.withAlphaComponent(
-                min(1, clampedOpacity + AnnotationMetrics.underlineAlphaBoost)
-            )
+            let stroke = color.withAlphaComponent(AnnotationMetrics.lineAlpha)
             context.setStrokeColor(stroke.cgColor)
-            context.setLineWidth(AnnotationMetrics.underlineWidth)
+            context.setLineWidth(AnnotationMetrics.underlineWidth * lineScale)
 
             if lineGeometries.isEmpty {
                 // 兜底：没有拿到字体基线时贴着行框底部画，至少不会消失。
@@ -141,9 +148,7 @@ enum AnnotationDrawing {
             context.strokePath()
 
         case .wavy:
-            let stroke = color.withAlphaComponent(
-                min(1, clampedOpacity + AnnotationMetrics.wavyAlphaBoost)
-            )
+            let stroke = color.withAlphaComponent(AnnotationMetrics.lineAlpha)
             stroke.setStroke()
 
             if lineGeometries.isEmpty {
@@ -151,7 +156,8 @@ enum AnnotationDrawing {
                     wavyPath(
                         from: rect.minX,
                         to: rect.maxX,
-                        baselineY: rect.maxY - AnnotationMetrics.fallbackBaselineInset
+                        baselineY: rect.maxY - AnnotationMetrics.fallbackBaselineInset,
+                        scale: lineScale
                     ).stroke()
                 }
             } else {
@@ -159,18 +165,15 @@ enum AnnotationDrawing {
                     wavyPath(
                         from: line.rect.minX,
                         to: line.rect.maxX,
-                        baselineY: line.baselineY + AnnotationMetrics.wavyOffset
+                        baselineY: line.baselineY + AnnotationMetrics.wavyOffset,
+                        scale: lineScale
                     ).stroke()
                 }
             }
 
         case .strikethrough:
-            context.setStrokeColor(
-                color.withAlphaComponent(
-                    min(1, clampedOpacity + AnnotationMetrics.strikethroughAlphaBoost)
-                ).cgColor
-            )
-            context.setLineWidth(AnnotationMetrics.strikethroughWidth)
+            context.setStrokeColor(color.withAlphaComponent(AnnotationMetrics.lineAlpha).cgColor)
+            context.setLineWidth(AnnotationMetrics.strikethroughWidth * lineScale)
 
             if lineGeometries.isEmpty {
                 for rect in rects {
@@ -222,10 +225,12 @@ enum AnnotationDrawing {
     private static func wavyPath(
         from startX: CGFloat,
         to endX: CGFloat,
-        baselineY: CGFloat
+        baselineY: CGFloat,
+        scale: CGFloat
     ) -> UIBezierPath {
         let path = UIBezierPath()
-        let amplitude = AnnotationMetrics.wavyAmplitude
+        // 振幅跟着线宽一起放大：只加粗不抬高，波形会挤成一条毛边。
+        let amplitude = AnnotationMetrics.wavyAmplitude * scale
         let halfWave = AnnotationMetrics.wavyHalfWave
 
         var x = startX
@@ -244,7 +249,7 @@ enum AnnotationDrawing {
             up.toggle()
         }
 
-        path.lineWidth = AnnotationMetrics.wavyWidth
+        path.lineWidth = AnnotationMetrics.wavyWidth * scale
         return path
     }
 }
@@ -254,79 +259,182 @@ enum AnnotationDrawing {
 /// 页面右侧留白里的「这条标注有笔记」指示条。
 ///
 /// 为什么不画在 `TextRenderView` 里：它的 frame 被约束在版心内（见 `TextVC`
-/// 的四边约束），右边距在视图之外，画出去会被裁掉。这里用一层铺满整页、
-/// 不接收触摸的兄弟视图，只负责在留白里画几根短线。
-final class AnnotationMarginView: UIView, AnnotationStateObserver {
+/// 的四边约束），右边距在视图之外，画出去会被裁掉。这里用一层铺满整页的
+/// 兄弟视图，只负责在留白里画几根短线。
+///
+/// 它同时是「打开编辑页」的入口：命中区只覆盖右侧留白（不越进版心），
+/// 其余位置 `point(inside:)` 一律返回 false，触摸照常落到正文与翻页手势上。
+final class AnnotationMarginView: UIView, AnnotationStateObserver, UIGestureRecognizerDelegate {
+
+    /// 点中某条指示器：打开这处标注的编辑页。
+    var onIndicatorTap: ((UUID) -> Void)?
 
     private let chapterLayout: ChapterLayout
     private let pageIndex: Int
     private let margins: ReaderMargins
     private let annotationState: ChapterAnnotationState
     private let showsIndicators: Bool
+    private let indicatorStyle: NoteIndicatorStyle
+
+    /// 一条指示器的图形与所属标注。`draw` 与点按共用同一份几何，
+    /// 避免"看得到却点不中"。
+    private struct Indicator {
+        let item: AnnotationItem
+        let box: CGRect
+    }
+
+    private var cachedIndicators: [Indicator]?
+    private var tapRecognizer: UITapGestureRecognizer?
 
     init(
         chapterLayout: ChapterLayout,
         pageIndex: Int,
         margins: ReaderMargins,
         annotationState: ChapterAnnotationState,
-        showsIndicators: Bool
+        showsIndicators: Bool,
+        indicatorStyle: NoteIndicatorStyle = .bar
     ) {
         self.chapterLayout = chapterLayout
         self.pageIndex = pageIndex
         self.margins = margins
         self.annotationState = annotationState
         self.showsIndicators = showsIndicators
+        self.indicatorStyle = indicatorStyle
         super.init(frame: .zero)
         backgroundColor = .clear
         isOpaque = false
-        isUserInteractionEnabled = false
         contentMode = .redraw
+        // 开着交互才能收到点按；是否真的接住这一下由 `point(inside:)` 决定。
+        isUserInteractionEnabled = true
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        tap.delegate = self
+        tap.cancelsTouchesInView = false
+        addGestureRecognizer(tap)
+        tapRecognizer = tap
         annotationState.addObserver(self)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func annotationStateDidChange() {
+        cachedIndicators = nil
         setNeedsDisplay()
     }
 
-    override func draw(_ rect: CGRect) {
-        guard showsIndicators,
-              bounds.width > 0,
-              let pageRange = chapterLayout.characterRange(forPage: pageIndex)
-        else { return }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // 指示条跟着正文行位置走，版心或尺寸一变就得重算命中框。
+        cachedIndicators = nil
+    }
 
-        let items = annotationState.items(intersecting: pageRange).filter(\.hasNote)
-        guard !items.isEmpty else { return }
+    // MARK: 命中
 
-        let barWidth = AnnotationMetrics.marginBarWidth
-        let barHeight = AnnotationMetrics.marginBarHeight
-        // 右边距通常 16–40pt；取中间偏外一点，太贴版心会像正文的一部分。
-        let centerX = bounds.width - max(
-            AnnotationMetrics.marginMinimumInset,
-            margins.right * AnnotationMetrics.marginInsetFactor
+    /// 点中指示器时独占这一下。
+    ///
+    /// 留白与书口边缘同时是 pageCurl 的翻页点击区；允许同时识别会变成
+    /// "打开编辑页的同时翻过去一页"。与 `TextRenderView` 命中标注时的处理一致。
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        false
+    }
+
+    /// 只有落在指示器的命中区里才接住触摸。
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        // 手势被关掉时（选中菜单在场，见 `MainViewController.setPageTurnTapGesturesEnabled`）
+        // 连命中都不要：让这一下穿到正文/翻页上，而不是变成一块点不动的死区。
+        guard tapRecognizer?.isEnabled ?? true else { return false }
+        return indicators().contains { hitBox(for: $0.box).contains(point) }
+    }
+
+    @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+        let point = gesture.location(in: self)
+        // 相邻两行都有笔记时命中区会重叠，取纵向最近的那条。
+        let nearest = indicators()
+            .filter { hitBox(for: $0.box).contains(point) }
+            .min { abs($0.box.midY - point.y) < abs($1.box.midY - point.y) }
+        guard let nearest else { return }
+        onIndicatorTap?(nearest.item.id)
+    }
+
+    /// 指示条只有 3pt 宽，按图形命中等于点不中。
+    ///
+    /// 命中区纵向放宽到 44pt（HIG 的最小触控高度），横向铺满右侧留白，
+    /// 但**不越进版心**：这一层盖在正文之上，越界就会抢走正文的点按。
+    private func hitBox(for box: CGRect) -> CGRect {
+        let textRight = max(0, bounds.width - margins.right)
+        let minX = min(textRight, box.minX)
+        return CGRect(
+            x: minX,
+            y: box.midY - AnnotationMetrics.marginHitHeight / 2,
+            width: max(0, bounds.width - minX),
+            height: AnnotationMetrics.marginHitHeight
         )
+    }
 
-        for item in items {
-            let rects = lineRects(for: item.range)
-            guard let first = rects.first else { continue }
+    // MARK: 绘制
 
-            let box = CGRect(
-                x: centerX - barWidth / 2,
-                // 贴着页底时上移，而不是直接不画：读者至少能看到"这一页有笔记"。
-                y: min(
-                    max(0, margins.top + first.midY - barHeight / 2),
-                    bounds.height - barHeight
-                ),
-                width: barWidth,
-                height: barHeight
-            )
-            guard box.maxY <= bounds.height else { continue }
-
-            let path = UIBezierPath(roundedRect: box, cornerRadius: barWidth / 2)
-            item.color.uiColor.withAlphaComponent(AnnotationMetrics.marginBarAlpha).setFill()
+    override func draw(_ rect: CGRect) {
+        for indicator in indicators() {
+            let path: UIBezierPath
+            switch indicatorStyle {
+            case .bar:
+                path = UIBezierPath(
+                    roundedRect: indicator.box,
+                    cornerRadius: indicator.box.width / 2
+                )
+            case .dot:
+                path = UIBezierPath(ovalIn: indicator.box)
+            }
+            indicator.item.color.uiColor
+                .withAlphaComponent(AnnotationMetrics.marginBarAlpha)
+                .setFill()
             path.fill()
         }
+    }
+
+    /// 本页所有笔记指示器的位置（含页面底部的贴边修正）。
+    private func indicators() -> [Indicator] {
+        if let cached = cachedIndicators { return cached }
+
+        var result: [Indicator] = []
+        if showsIndicators,
+           bounds.width > 0,
+           let pageRange = chapterLayout.characterRange(forPage: pageIndex) {
+
+            let items = annotationState.items(intersecting: pageRange).filter(\.hasNote)
+            let markWidth = indicatorStyle == .dot
+                ? AnnotationMetrics.marginDotDiameter
+                : AnnotationMetrics.marginBarWidth
+            let markHeight = indicatorStyle == .dot
+                ? AnnotationMetrics.marginDotDiameter
+                : AnnotationMetrics.marginBarHeight
+            // 右边距通常 16–40pt；取中间偏外一点，太贴版心会像正文的一部分。
+            let centerX = bounds.width - max(
+                AnnotationMetrics.marginMinimumInset,
+                margins.right * AnnotationMetrics.marginInsetFactor
+            )
+
+            for item in items {
+                guard let first = lineRects(for: item.range).first else { continue }
+                let box = CGRect(
+                    x: centerX - markWidth / 2,
+                    // 贴着页底时上移，而不是直接不画：读者至少能看到"这一页有笔记"。
+                    y: min(
+                        max(0, margins.top + first.midY - markHeight / 2),
+                        bounds.height - markHeight
+                    ),
+                    width: markWidth,
+                    height: markHeight
+                )
+                guard box.maxY <= bounds.height else { continue }
+                result.append(Indicator(item: item, box: box))
+            }
+        }
+
+        cachedIndicators = result
+        return result
     }
 
     private func lineRects(for range: NSRange) -> [CGRect] {
