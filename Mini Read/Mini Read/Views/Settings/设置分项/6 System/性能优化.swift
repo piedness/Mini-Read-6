@@ -15,16 +15,6 @@ struct PerformanceSettingsView: View {
         List {
             // 调试（开发者选项）
             Section {
-
-                Button("查看日志") {
-                    // 打开日志
-                }
-                Button("网络诊断") {
-                    // 网络测试
-                }
-                Button("性能监控") {
-                    // 性能面板
-                }
                 NavigationLink("实验性功能") {
                     ExperimentalFeaturesView()
                 }
